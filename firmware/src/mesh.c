@@ -32,17 +32,43 @@ static uint8_t dh_ephemeral_priv[32];
 static uint8_t dh_ephemeral_pub[32];
 static uint8_t dh_in_progress[256];
 
+static kuznyechik_ctx_t prng_ctx;
+static uint8_t prng_counter[16];
+static uint8_t prng_initialized = 0;
+
 #define TIMESTAMP_CLEANUP_INTERVAL 10000
 #define TIMESTAMP_MAX_AGE 60000
 
 void mesh_get_random(uint8_t *buf, uint8_t len) {
-    static uint32_t seed = 0xACE1;
-    if (seed == 0xACE1) seed += self_node_id + internal_clock;
-    for (uint8_t i = 0; i < len; i++) {
-        seed = (seed >> 1) ^ (-(seed & 1u) & 0xB0004005u);
-        buf[i] = (uint8_t)(seed ^ (internal_clock >> (i % 4)));
+    if (!prng_initialized) {
+        uint8_t seed[32];
+        memset(seed, 0, 32);
+        seed[0] = self_node_id;
+        uint32_t t = internal_clock;
+        memcpy(seed + 4, &t, 4);
+        // Add some fixed entropy for now, in real HW this would be RNG or ADC noise
+        for(int i=8; i<32; i++) seed[i] = 0x55 ^ i ^ self_node_id;
+        
+        kuznyechik_init(&prng_ctx, seed);
+        memset(prng_counter, 0, 16);
+        prng_initialized = 1;
+    }
+
+    for (uint8_t i = 0; i < len; ) {
+        uint8_t block[16];
+        kuznyechik_encrypt_block(&prng_ctx, prng_counter, block);
+        
+        // Increment 128-bit counter
+        for (int j = 15; j >= 0; j--) {
+            if (++prng_counter[j] != 0) break;
+        }
+
+        uint8_t chunk = (len - i < 16) ? (len - i) : 16;
+        memcpy(buf + i, block, chunk);
+        i += chunk;
     }
 }
+
 
 void secure_memset(void *v, int c, size_t n) {
     volatile uint8_t *p = (volatile uint8_t *)v;

@@ -39,12 +39,20 @@ class MeshNode:
         self.dh_in_progress = set()
         
         # Identity keys (Ed25519)
-        # For simulation, derive from node_id
-        dummy_seed = bytes([self._node_id_to_int(self.node_id)] * 32)
+        # In simulation, use os.urandom for proper security
+        identity_seed = os.urandom(32)
         from cryptography.hazmat.primitives.asymmetric import ed25519
-        self.identity_priv = ed25519.Ed25519PrivateKey.from_private_bytes(dummy_seed)
+        self.identity_priv = ed25519.Ed25519PrivateKey.from_private_bytes(identity_seed)
         self.identity_pub = self.identity_priv.public_key()
         self.node_identity_pubs = {}
+
+        # Log our public key so others can "know" it (simulating provisioning)
+        pub_bytes = self.identity_pub.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw
+        )
+        log(f"[{self.node_id}] [IDENTITY] Public Key: {pub_bytes.hex()}")
+
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(('0.0.0.0', self.udp_port))
@@ -396,7 +404,10 @@ class MeshNode:
             dst_val = dst
         mac_data.append(dst_val)
 
-        mac_data.append(0)  # type DATA (hardcoded for now as in C)
+        # Use actual packet type mapping
+        type_map = {"DATA": 0, "RREQ": 1, "RREP": 2, "TIME": 3, "KEY_ROTATION": 4, "DH_REQ": 6, "DH_REP": 7}
+        mac_data.append(type_map.get(packet.get('type'), 0))
+
         mac_data.extend(int(packet['timestamp']).to_bytes(4, 'little'))
         payload_bytes = base64.b64decode(packet['payload'])
         mac_data.append(len(payload_bytes))
@@ -433,7 +444,7 @@ class MeshNode:
         mac_data.append(dst_val)
 
         # Тип пакета (Data=0, RREQ=1, RREP=2, etc)
-        type_map = {"DATA": 0, "RREQ": 1, "RREP": 2, "TIME": 3, "KEY_ROTATION": 4}
+        type_map = {"DATA": 0, "RREQ": 1, "RREP": 2, "TIME": 3, "KEY_ROTATION": 4, "DH_REQ": 6, "DH_REP": 7}
         mac_data.append(type_map.get(packet['type'], 0))
 
         # TTL НЕ включаем — он меняется при пересылке

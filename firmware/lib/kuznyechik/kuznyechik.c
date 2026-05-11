@@ -105,23 +105,61 @@ void kuznyechik_decrypt_block(kuznyechik_ctx_t *ctx, const uint8_t *in, uint8_t 
     memcpy(out, state, 16);
 }
 
+static void cmac_shift_left(uint8_t *out, const uint8_t *in) {
+    uint8_t carry = 0;
+    for (int i = 15; i >= 0; i--) {
+        uint8_t next_carry = (in[i] & 0x80) ? 1 : 0;
+        out[i] = (in[i] << 1) | carry;
+        carry = next_carry;
+    }
+}
+
+static void cmac_generate_subkeys(kuznyechik_ctx_t *ctx, uint8_t *k1, uint8_t *k2) {
+    uint8_t l[16];
+    uint8_t zero[16] = {0};
+    kuznyechik_encrypt_block(ctx, zero, l);
+
+    if (l[0] & 0x80) {
+        cmac_shift_left(k1, l);
+        k1[15] ^= 0x87;
+    } else {
+        cmac_shift_left(k1, l);
+    }
+
+    if (k1[0] & 0x80) {
+        cmac_shift_left(k2, k1);
+        k2[15] ^= 0x87;
+    } else {
+        cmac_shift_left(k2, k1);
+    }
+}
+
 void kuznyechik_mac(kuznyechik_ctx_t *ctx, const uint8_t *data, size_t len, uint8_t *mac) {
-    uint8_t state[16];
-    memset(state, 0, 16);
+    uint8_t k1[16], k2[16];
+    cmac_generate_subkeys(ctx, k1, k2);
 
-    for (size_t i = 0; i < len; i += 16) {
-        uint8_t block[16];
-        size_t block_len = (len - i < 16) ? (len - i) : 16;
+    uint8_t state[16] = {0};
+    size_t n = (len + 15) / 16;
+    if (n == 0) n = 1;
 
-        memset(block, 0, 16);
-        memcpy(block, data + i, block_len);
-
+    for (size_t i = 0; i < n - 1; i++) {
         for (int j = 0; j < 16; j++) {
-            state[j] ^= block[j];
+            state[j] ^= data[i * 16 + j];
         }
-
         kuznyechik_encrypt_block(ctx, state, state);
     }
 
-    memcpy(mac, state, 16);
+    uint8_t last_block[16] = {0};
+    size_t last_len = len - (n - 1) * 16;
+    memcpy(last_block, data + (n - 1) * 16, last_len);
+
+    if (last_len == 16) {
+        for (int j = 0; j < 16; j++) state[j] ^= last_block[j] ^ k1[j];
+    } else {
+        last_block[last_len] = 0x80;
+        for (int j = 0; j < 16; j++) state[j] ^= last_block[j] ^ k2[j];
+    }
+
+    kuznyechik_encrypt_block(ctx, state, mac);
 }
+

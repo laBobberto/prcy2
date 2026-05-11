@@ -103,22 +103,27 @@ class Kuznyechik:
             res = 0
             for i in range(16):
                 res ^= galois_mul(block[i], L_COEFFS[i])
-            block = block[1:] + bytearray([res])
+            # Match C: memmove(block + 1, block, 15); block[0] = res;
+            for j in range(15, 0, -1):
+                block[j] = block[j-1]
+            block[0] = res
         return bytes(block)
 
     def _inv_l(self, block):
         block = bytearray(block)
         for _ in range(16):
-            res = block[-1]
-            for i in range(15, 0, -1):
-                block[i] = block[i-1]
-            block[0] = res
-
-            temp = 0
+            # Match C inv_l_func
+            saved = block[0]
+            for j in range(15):
+                block[j] = block[j+1]
+            block[15] = saved
+            
+            res = 0
             for i in range(16):
-                temp ^= galois_mul(block[i], L_COEFFS[i])
-            block[0] = temp
+                res ^= galois_mul(block[i], L_COEFFS[i])
+            block[15] = res
         return bytes(block)
+
 
     def encrypt_block(self, block):
         res = bytearray(block)
@@ -169,16 +174,56 @@ class Kuznyechik:
                 result[i + j] ^= keystream[j]
         return bytes(result)
 
-    def mac(self, data):
-        state = bytearray(16)
-        for i in range(0, len(data), 16):
-            block = bytearray(16)
-            block_len = min(16, len(data) - i)
-            block[0:block_len] = data[i:i+block_len]
+    def _cmac_shift_left(self, data):
+        res = bytearray(16)
+        carry = 0
+        for i in range(15, -1, -1):
+            next_carry = 1 if (data[i] & 0x80) else 0
+            res[i] = ((data[i] << 1) & 0xFF) | carry
+            carry = next_carry
+        return bytes(res)
 
+    def _cmac_generate_subkeys(self):
+        l = self.encrypt_block(b'\x00' * 16)
+        if l[0] & 0x80:
+            k1 = bytearray(self._cmac_shift_left(l))
+            k1[15] ^= 0x87
+            k1 = bytes(k1)
+        else:
+            k1 = self._cmac_shift_left(l)
+
+        if k1[0] & 0x80:
+            k2 = bytearray(self._cmac_shift_left(k1))
+            k2[15] ^= 0x87
+            k2 = bytes(k2)
+        else:
+            k2 = self._cmac_shift_left(k1)
+        return k1, k2
+
+    def mac(self, data):
+        k1, k2 = self._cmac_generate_subkeys()
+        n = (len(data) + 15) // 16
+        if n == 0:
+            n = 1
+        
+        state = bytearray(16)
+        for i in range(n - 1):
+            block = data[i*16:(i+1)*16]
             for j in range(16):
                 state[j] ^= block[j]
-
             state = bytearray(self.encrypt_block(bytes(state)))
 
-        return bytes(state)
+        last_block = bytearray(16)
+        last_len = len(data) - (n - 1) * 16
+        last_block[0:last_len] = data[(n - 1) * 16:]
+        
+        if last_len == 16:
+            for j in range(16):
+                state[j] ^= last_block[j] ^ k1[j]
+        else:
+            last_block[last_len] = 0x80
+            for j in range(16):
+                state[j] ^= last_block[j] ^ k2[j]
+        
+        return self.encrypt_block(bytes(state))
+

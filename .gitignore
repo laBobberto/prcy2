@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# C/C++
+*.o
+*.elf
+*.bin
+tests_x86/test_crypto_x86
+tests_x86/test_crypto
+
+# OS/IDE
+.DS_Store
+.vscode/
+.idea/
+.claude/
+
+# Project specific
+test_renode.out
+node1.log
+node2.log
+node3.log
+node4.log
+node5.log
+*.rpm
+compact25519-main/
+tweetnacl_full.c
