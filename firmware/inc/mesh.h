@@ -3,6 +3,7 @@
 #define MESH_H
 
 #include <stdint.h>
+#include "kuznyechik.h"
 
 #define MAX_PAYLOAD_SIZE 64
 #define MESH_DEFAULT_TTL 20
@@ -61,8 +62,8 @@ typedef struct {
     uint8_t  payload_len;
     uint8_t  e2e_encrypted;
     uint8_t  payload[MAX_PAYLOAD_SIZE];
-    uint16_t e2e_mic;
-    uint16_t link_mic;
+    uint32_t e2e_mic;    // Увеличено до 32 бит
+    uint32_t link_mic;   // Увеличено до 32 бит
 } mesh_packet_t;
 #pragma pack(pop)
 

@@ -2,10 +2,10 @@
 CC = arm-none-eabi-gcc
 OBJCOPY = arm-none-eabi-objcopy
 
-CFLAGS = -mcpu=cortex-m4 -mthumb -O2 -Wall -g -Iinc -Ilib/kuznyechik
+CFLAGS = -mcpu=cortex-m4 -mthumb -O2 -Wall -g -Iinc -Ilib/kuznyechik -Ilib/crypto
 LDFLAGS = -specs=nosys.specs -T stm32f4.ld
 
-SRC = src/mesh.c lib/kuznyechik/kuznyechik.c src/main.c src/debug.c src/lora.c
+SRC = src/mesh.c lib/kuznyechik/kuznyechik.c lib/crypto/mesh_crypto.c src/main.c src/debug.c src/lora.c
 OBJ = $(SRC:.c=.o)
 
 all: mesh_firmware.elf mesh_firmware.bin

@@ -246,33 +246,82 @@ class MeshNode:
 
     def compute_e2e_mic(self, packet, key_crypto):
         mac_data = bytearray()
-        mac_data.append(ord(packet['src'][0]) if isinstance(packet['src'], str) else packet['src'])
-        mac_data.append(ord(packet['dst'][0]) if isinstance(packet['dst'], str) else packet['dst'])
-        mac_data.append(0)  # type DATA
+        src = packet['src']
+        if isinstance(src, str):
+            if src.startswith("NODE"):
+                src_val = int(src[4:])
+            elif src == "GATEWAY":
+                src_val = 1
+            else:
+                src_val = ord(src[0])
+        else:
+            src_val = src
+        mac_data.append(src_val)
+
+        dst = packet['dst']
+        if isinstance(dst, str):
+            if dst.startswith("NODE"):
+                dst_val = int(dst[4:])
+            elif dst == "GATEWAY":
+                dst_val = 1
+            else:
+                dst_val = ord(dst[0])
+        else:
+            dst_val = dst
+        mac_data.append(dst_val)
+
+        mac_data.append(0)  # type DATA (hardcoded for now as in C)
         mac_data.extend(int(packet['timestamp']).to_bytes(4, 'little'))
         payload_bytes = base64.b64decode(packet['payload'])
         mac_data.append(len(payload_bytes))
         mac_data.extend(payload_bytes)
 
         mac = key_crypto.mac(bytes(mac_data))
-        return (mac[0] << 8) | mac[1]
+        # Возвращаем 32 бита (4 байта)
+        return int.from_bytes(mac[0:4], 'big')
 
     def compute_link_mic(self, packet):
         mac_data = bytearray()
-        mac_data.append(ord(packet['src'][0]) if isinstance(packet['src'], str) else packet['src'])
-        mac_data.append(ord(packet['dst'][0]) if isinstance(packet['dst'], str) else packet['dst'])
-        mac_data.append(0)  # type DATA
+        src = packet['src']
+        if isinstance(src, str):
+            if src.startswith("NODE"):
+                src_val = int(src[4:])
+            elif src == "GATEWAY":
+                src_val = 1
+            else:
+                src_val = ord(src[0])
+        else:
+            src_val = src
+        mac_data.append(src_val)
+
+        dst = packet['dst']
+        if isinstance(dst, str):
+            if dst.startswith("NODE"):
+                dst_val = int(dst[4:])
+            elif dst == "GATEWAY":
+                dst_val = 1
+            else:
+                dst_val = ord(dst[0])
+        else:
+            dst_val = dst
+        mac_data.append(dst_val)
+
+        # Тип пакета (Data=0, RREQ=1, RREP=2, etc)
+        type_map = {"DATA": 0, "RREQ": 1, "RREP": 2, "TIME": 3, "KEY_ROTATION": 4}
+        mac_data.append(type_map.get(packet['type'], 0))
+
         # TTL НЕ включаем — он меняется при пересылке
         mac_data.extend(int(packet['timestamp']).to_bytes(4, 'little'))
         payload_bytes = base64.b64decode(packet['payload'])
         mac_data.append(len(payload_bytes))
         mac_data.append(1 if packet.get('e2e_encrypted') else 0)
         mac_data.extend(payload_bytes)
+        
         e2e_mic = packet.get('e2e_mic', 0)
-        mac_data.extend(e2e_mic.to_bytes(2, 'big'))
+        mac_data.extend(e2e_mic.to_bytes(4, 'big')) # 4 bytes
 
         mac = self.session_crypto.mac(bytes(mac_data))
-        return (mac[0] << 8) | mac[1]
+        return int.from_bytes(mac[0:4], 'big')
 
     def broadcast_time(self):
         pkt = {

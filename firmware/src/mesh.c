@@ -1,6 +1,5 @@
-
 #include "mesh.h"
-#include "kuznyechik.h"
+#include "mesh_crypto.h"
 #include "debug.h"
 #include <string.h>
 
@@ -73,63 +72,6 @@ uint32_t mesh_get_time(void) {
     return internal_clock;
 }
 
-static uint16_t compute_e2e_mic(mesh_packet_t *pkt, kuznyechik_ctx_t *key) {
-    uint8_t mac_data[128];
-    int offset = 0;
-
-    mac_data[offset++] = pkt->src_id;
-    mac_data[offset++] = pkt->dst_id;
-    mac_data[offset++] = pkt->type;
-    memcpy(mac_data + offset, &pkt->timestamp, 4);
-    offset += 4;
-    mac_data[offset++] = pkt->payload_len;
-    memcpy(mac_data + offset, pkt->payload, pkt->payload_len);
-    offset += pkt->payload_len;
-
-    uint8_t mac[16];
-    kuznyechik_mac(key, mac_data, offset, mac);
-
-    return (mac[0] << 8) | mac[1];
-}
-
-static uint16_t compute_link_mic(mesh_packet_t *pkt) {
-    uint8_t mac_data[128];
-    int offset = 0;
-
-    mac_data[offset++] = pkt->src_id;
-    mac_data[offset++] = pkt->dst_id;
-    mac_data[offset++] = pkt->type;
-    // TTL НЕ включаем — он меняется при пересылке
-    memcpy(mac_data + offset, &pkt->timestamp, 4);
-    offset += 4;
-    mac_data[offset++] = pkt->payload_len;
-    mac_data[offset++] = pkt->e2e_encrypted;
-    memcpy(mac_data + offset, pkt->payload, pkt->payload_len);
-    offset += pkt->payload_len;
-    memcpy(mac_data + offset, &pkt->e2e_mic, 2);
-    offset += 2;
-
-    uint8_t mac[16];
-    kuznyechik_mac(&session_crypto, mac_data, offset, mac);
-
-    return (mac[0] << 8) | mac[1];
-}
-
-void mesh_crypt_ctr(kuznyechik_ctx_t *ctx, uint32_t nonce, uint8_t *data, uint8_t len) {
-    uint8_t counter_block[16];
-    uint8_t keystream[16];
-    for (int i = 0; i < len; i += 16) {
-        memset(counter_block, 0, 16);
-        memcpy(counter_block, &nonce, 4);
-        uint32_t block_idx = i / 16;
-        memcpy(counter_block + 4, &block_idx, 4);
-        kuznyechik_encrypt_block(ctx, counter_block, keystream);
-        for (int j = 0; j < 16 && (i + j) < len; j++) {
-            data[i + j] ^= keystream[j];
-        }
-    }
-}
-
 void mesh_process_packet(mesh_packet_t *pkt) {
     if (pkt->ttl == 0) return;
 
@@ -140,7 +82,7 @@ void mesh_process_packet(mesh_packet_t *pkt) {
 
         uint8_t new_key[32];
         memcpy(new_key, pkt->payload, 32);
-        mesh_crypt_ctr(&master_ctx, pkt->timestamp, new_key, 32);
+        mesh_crypto_ctr(&master_ctx, pkt->timestamp, new_key, 32);
 
         kuznyechik_init(&session_crypto, new_key);
         debug_puts("[SECURITY] Session key updated and synced\n");
@@ -174,7 +116,7 @@ void mesh_process_packet(mesh_packet_t *pkt) {
     }
 
     if (pkt->type == PACKET_TYPE_RREQ) {
-        uint16_t expected_link_mic = compute_link_mic(pkt);
+        uint32_t expected_link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)pkt, &session_crypto);
         if (pkt->link_mic != expected_link_mic) {
             debug_puts("[SECURITY] Link MIC verification FAILED! Packet dropped.\n");
             return;
@@ -184,7 +126,7 @@ void mesh_process_packet(mesh_packet_t *pkt) {
     }
 
     if (pkt->type == PACKET_TYPE_RREP) {
-        uint16_t expected_link_mic = compute_link_mic(pkt);
+        uint32_t expected_link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)pkt, &session_crypto);
         if (pkt->link_mic != expected_link_mic) {
             debug_puts("[SECURITY] Link MIC verification FAILED! Packet dropped.\n");
             return;
@@ -193,61 +135,68 @@ void mesh_process_packet(mesh_packet_t *pkt) {
         return;
     }
 
-    uint16_t expected_link_mic = compute_link_mic(pkt);
+    if (pkt->src_id == self_node_id) return;
+
+    if (pkt->timestamp <= last_timestamps[pkt->src_id]) {
+        if (internal_clock - pkt->timestamp > 60000) {
+            debug_puts("[SECURITY] Packet too old, dropping\n");
+            return;
+        }
+    }
+    last_timestamps[pkt->src_id] = pkt->timestamp;
+
+    uint32_t expected_link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)pkt, &session_crypto);
     if (pkt->link_mic != expected_link_mic) {
         debug_puts("[SECURITY] Link MIC verification FAILED! Packet dropped.\n");
         return;
     }
 
-    if (pkt->timestamp <= last_timestamps[pkt->src_id]) return;
-    last_timestamps[pkt->src_id] = pkt->timestamp;
-
-    if (pkt->dst_id == self_node_id) {
-        if (pkt->type == PACKET_TYPE_DATA) {
-            if (pkt->e2e_encrypted && pairwise_keys_set[pkt->src_id]) {
-                uint16_t expected_e2e_mic = compute_e2e_mic(pkt, &pairwise_keys[pkt->src_id]);
-                if (pkt->e2e_mic != expected_e2e_mic) {
-                    debug_puts("[SECURITY] E2E MIC verification FAILED! Message dropped.\n");
-                    return;
-                }
-
-                mesh_crypt_ctr(&pairwise_keys[pkt->src_id], pkt->timestamp, pkt->payload, pkt->payload_len);
-                debug_puts("\n*** E2E MSG FROM NODE ");
-            } else {
-                mesh_crypt_ctr(&session_crypto, pkt->timestamp, pkt->payload, pkt->payload_len);
-                debug_puts("\n*** LINK MSG FROM NODE ");
+    if (pkt->dst_id == self_node_id || pkt->dst_id == 255) {
+        if (pkt->e2e_encrypted && pairwise_keys_set[pkt->src_id]) {
+            uint32_t expected_e2e_mic = mesh_crypto_compute_e2e_mic((mesh_crypto_packet_t*)pkt, &pairwise_keys[pkt->src_id]);
+            if (pkt->e2e_mic != expected_e2e_mic) {
+                debug_puts("[SECURITY] E2E MIC verification FAILED! Data might be tampered.\n");
+                return;
             }
+            mesh_crypto_ctr(&pairwise_keys[pkt->src_id], pkt->timestamp, pkt->payload, pkt->payload_len);
+        } else if (!pkt->e2e_encrypted) {
+            mesh_crypto_ctr(&session_crypto, pkt->timestamp, pkt->payload, pkt->payload_len);
+        }
+
+        if (pkt->type == PACKET_TYPE_DATA) {
+            debug_puts("[MESH] Received data from node ");
             debug_puti(pkt->src_id);
-            debug_puts(": [");
+            debug_puts(": ");
             for(int i=0; i<pkt->payload_len; i++) {
                 if (pkt->payload[i] == 0) break;
                 debug_putc(pkt->payload[i]);
             }
-            debug_puts("] ***\n");
+            debug_puts("\n");
         }
-    } else {
-        pkt->ttl--;
-        void lora_send_packet(mesh_packet_t *p);
-        lora_send_packet(pkt);
+    }
+
+    if (pkt->dst_id != self_node_id && pkt->ttl > 0) {
+        route_entry_t *route = mesh_find_route(pkt->dst_id);
+        if (route && route->valid) {
+            pkt->ttl--;
+            pkt->link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)pkt, &session_crypto);
+            void lora_send_packet(mesh_packet_t *p);
+            lora_send_packet(pkt);
+            debug_puts("[MESH] Relaying packet to node ");
+            debug_puti(pkt->dst_id);
+            debug_puts("\n");
+        } else if (pkt->dst_id == 255) {
+            pkt->ttl--;
+            pkt->link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)pkt, &session_crypto);
+            void lora_send_packet(mesh_packet_t *p);
+            lora_send_packet(pkt);
+        } else {
+            mesh_send_rreq(pkt->dst_id);
+        }
     }
 }
 
 void mesh_send_data(uint8_t dst_id, const uint8_t *data, uint8_t len) {
-    route_entry_t *route = mesh_find_route(dst_id);
-    if (!route) {
-        debug_puts("[AODV] No route to ");
-        debug_puti(dst_id);
-        debug_puts(", initiating route discovery\n");
-        mesh_send_rreq(dst_id);
-        return;
-    }
-
-    static uint32_t last_sent_ts = 0;
-    if (internal_clock <= last_sent_ts) {
-        internal_clock = last_sent_ts + 1;
-    }
-    last_sent_ts = internal_clock;
-
     mesh_packet_t pkt;
     memset(&pkt, 0, sizeof(pkt));
     pkt.src_id = self_node_id;
@@ -256,34 +205,28 @@ void mesh_send_data(uint8_t dst_id, const uint8_t *data, uint8_t len) {
     pkt.ttl = MESH_DEFAULT_TTL;
     pkt.timestamp = internal_clock;
     pkt.payload_len = (len + 15) & ~15;
-
+    if (pkt.payload_len > MAX_PAYLOAD_SIZE) pkt.payload_len = MAX_PAYLOAD_SIZE;
     memcpy(pkt.payload, data, len);
 
     if (pairwise_keys_set[dst_id]) {
-        pkt.e2e_mic = compute_e2e_mic(&pkt, &pairwise_keys[dst_id]);
-        mesh_crypt_ctr(&pairwise_keys[dst_id], pkt.timestamp, pkt.payload, pkt.payload_len);
         pkt.e2e_encrypted = 1;
-        debug_puts("[MESH] Sent E2E encrypted packet to ");
+        pkt.e2e_mic = mesh_crypto_compute_e2e_mic((mesh_crypto_packet_t*)&pkt, &pairwise_keys[dst_id]);
+        mesh_crypto_ctr(&pairwise_keys[dst_id], pkt.timestamp, pkt.payload, pkt.payload_len);
     } else {
-        pkt.e2e_mic = 0;
-        mesh_crypt_ctr(&session_crypto, pkt.timestamp, pkt.payload, pkt.payload_len);
         pkt.e2e_encrypted = 0;
-        debug_puts("[MESH] Sent link-encrypted packet to ");
+        pkt.e2e_mic = 0;
+        mesh_crypto_ctr(&session_crypto, pkt.timestamp, pkt.payload, pkt.payload_len);
     }
 
-    pkt.link_mic = compute_link_mic(&pkt);
+    pkt.link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)&pkt, &session_crypto);
 
-    debug_puti(dst_id);
-    debug_puts(" T=");
-    debug_puti(pkt.timestamp);
-    debug_puts(" E2E_MIC=");
-    debug_puti(pkt.e2e_mic);
-    debug_puts(" LINK_MIC=");
-    debug_puti(pkt.link_mic);
-    debug_puts("\n");
-
-    void lora_send_packet(mesh_packet_t *p);
-    lora_send_packet(&pkt);
+    route_entry_t *route = mesh_find_route(dst_id);
+    if (route && route->valid) {
+        void lora_send_packet(mesh_packet_t *p);
+        lora_send_packet(&pkt);
+    } else {
+        mesh_send_rreq(dst_id);
+    }
 }
 
 void mesh_rotate_session_key(const uint8_t *new_key) {
@@ -301,14 +244,14 @@ void mesh_rotate_session_key(const uint8_t *new_key) {
 
     uint8_t encrypted_key[32];
     memcpy(encrypted_key, new_key, 32);
-    mesh_crypt_ctr(&master_ctx, pkt.timestamp, encrypted_key, 32);
+    mesh_crypto_ctr(&master_ctx, pkt.timestamp, encrypted_key, 32);
     memcpy(pkt.payload, encrypted_key, 32);
 
     void lora_send_packet(mesh_packet_t *p);
     lora_send_packet(&pkt);
 
     kuznyechik_init(&session_crypto, new_key);
-    debug_puts("[SECURITY] Master updated local session key\n");
+    debug_puts("[SECURITY] Initiated session key rotation\n");
 }
 
 void mesh_broadcast_time(void) {
@@ -445,7 +388,7 @@ void mesh_send_rreq(uint8_t dest_id) {
     memcpy(pkt.payload, &rreq, sizeof(rreq));
     pkt.payload_len = sizeof(rreq);
 
-    pkt.link_mic = compute_link_mic(&pkt);
+    pkt.link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)&pkt, &session_crypto);
 
     void lora_send_packet(mesh_packet_t *p);
     lora_send_packet(&pkt);
@@ -492,7 +435,7 @@ void mesh_process_rreq(mesh_packet_t *pkt, uint8_t from_node) {
         memcpy(rrep.payload, &rrep_data, sizeof(rrep_data));
         rrep.payload_len = sizeof(rrep_data);
 
-        rrep.link_mic = compute_link_mic(&rrep);
+        rrep.link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)&rrep, &session_crypto);
 
         void lora_send_packet(mesh_packet_t *p);
         lora_send_packet(&rrep);
@@ -505,7 +448,7 @@ void mesh_process_rreq(mesh_packet_t *pkt, uint8_t from_node) {
         pkt->ttl--;
         if (pkt->ttl > 0) {
             memcpy(pkt->payload, &rreq, sizeof(rreq));
-            pkt->link_mic = compute_link_mic(pkt);
+            pkt->link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)pkt, &session_crypto);
 
             void lora_send_packet(mesh_packet_t *p);
             lora_send_packet(pkt);
@@ -532,7 +475,7 @@ void mesh_process_rrep(mesh_packet_t *pkt, uint8_t from_node) {
             pkt->ttl--;
             if (pkt->ttl > 0) {
                 memcpy(pkt->payload, &rrep, sizeof(rrep));
-                pkt->link_mic = compute_link_mic(pkt);
+                pkt->link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)pkt, &session_crypto);
 
                 void lora_send_packet(mesh_packet_t *p);
                 lora_send_packet(pkt);
