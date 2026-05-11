@@ -1,0 +1,40 @@
+# Renode configuration for STM32F4 Mesh Network
+# 3 nodes: NODE1 (Time Master) -- NODE2 (Relay) -- NODE3
+
+# Create 3 STM32F4 machines
+mach create "node1"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+sysbus LoadELF @firmware/mesh_firmware.elf
+
+mach create "node2"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+sysbus LoadELF @firmware/mesh_firmware.elf
+
+mach create "node3"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+sysbus LoadELF @firmware/mesh_firmware.elf
+
+# Setup UART for debugging
+mach set "node1"
+showAnalyzer sysbus.usart2
+
+mach set "node2"
+showAnalyzer sysbus.usart2
+
+mach set "node3"
+showAnalyzer sysbus.usart2
+
+# Start all machines
+mach set "node1"
+start
+
+mach set "node2"
+start
+
+mach set "node3"
+start
+
+echo "Mesh network with 3 STM32F4 nodes started"
+echo "NODE1: Time Master"
+echo "NODE2: Relay"
+echo "NODE3: End node"

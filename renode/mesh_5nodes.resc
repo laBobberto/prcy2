@@ -1,0 +1,79 @@
+# Renode configuration for STM32F4 Mesh Network
+# 5 nodes: NODE1 -- NODE2 -- NODE3 -- NODE4 -- NODE5
+# Topology: Linear chain
+
+# Create 5 STM32F4 machines
+mach create "node1"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+sysbus LoadELF @firmware/mesh_firmware.elf
+
+mach create "node2"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+sysbus LoadELF @firmware/mesh_firmware.elf
+
+mach create "node3"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+sysbus LoadELF @firmware/mesh_firmware.elf
+
+mach create "node4"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+sysbus LoadELF @firmware/mesh_firmware.elf
+
+mach create "node5"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+sysbus LoadELF @firmware/mesh_firmware.elf
+
+# Setup UART for debugging
+mach set "node1"
+showAnalyzer sysbus.usart2
+emulation CreateUartPtyTerminal "term1" "/tmp/node1_uart"
+connector Connect sysbus.usart2 term1
+
+mach set "node2"
+showAnalyzer sysbus.usart2
+emulation CreateUartPtyTerminal "term2" "/tmp/node2_uart"
+connector Connect sysbus.usart2 term2
+
+mach set "node3"
+showAnalyzer sysbus.usart2
+emulation CreateUartPtyTerminal "term3" "/tmp/node3_uart"
+connector Connect sysbus.usart2 term3
+
+mach set "node4"
+showAnalyzer sysbus.usart2
+emulation CreateUartPtyTerminal "term4" "/tmp/node4_uart"
+connector Connect sysbus.usart2 term4
+
+mach set "node5"
+showAnalyzer sysbus.usart2
+emulation CreateUartPtyTerminal "term5" "/tmp/node5_uart"
+connector Connect sysbus.usart2 term5
+
+# Start all machines
+mach set "node1"
+start
+
+mach set "node2"
+start
+
+mach set "node3"
+start
+
+mach set "node4"
+start
+
+mach set "node5"
+start
+
+echo "Mesh network with 5 STM32F4 nodes started"
+echo "Topology: NODE1 -- NODE2 -- NODE3 -- NODE4 -- NODE5"
+echo "NODE1: Time Master"
+echo "NODE2-4: Relay nodes"
+echo "NODE5: End node"
+echo ""
+echo "UART terminals:"
+echo "  NODE1: /tmp/node1_uart"
+echo "  NODE2: /tmp/node2_uart"
+echo "  NODE3: /tmp/node3_uart"
+echo "  NODE4: /tmp/node4_uart"
+echo "  NODE5: /tmp/node5_uart"

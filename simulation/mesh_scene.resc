@@ -1,0 +1,54 @@
+
+emulation CreateUARTHub "radio_hub"
+
+# Узел 1 (Порт 12341)
+mach create "node1"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+connector Connect sysbus.usart3 radio_hub
+emulation CreateServerSocketTerminal 12341 "uart1"
+connector Connect sysbus.usart2 uart1
+sysbus LoadELF @firmware/mesh_firmware.elf
+mach set "node1"
+cpu SetRegisterUnsafe 11 1
+
+# Узел 2 (Порт 12342)
+mach create "node2"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+connector Connect sysbus.usart3 radio_hub
+emulation CreateServerSocketTerminal 12342 "uart2"
+connector Connect sysbus.usart2 uart2
+sysbus LoadELF @firmware/mesh_firmware.elf
+mach set "node2"
+cpu SetRegisterUnsafe 11 2
+
+# Узел 3 (Порт 12343)
+mach create "node3"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+connector Connect sysbus.usart3 radio_hub
+emulation CreateServerSocketTerminal 12343 "uart3"
+connector Connect sysbus.usart2 uart3
+sysbus LoadELF @firmware/mesh_firmware.elf
+mach set "node3"
+cpu SetRegisterUnsafe 11 3
+
+# Узел 4 (Порт 12344)
+mach create "node4"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+connector Connect sysbus.usart3 radio_hub
+emulation CreateServerSocketTerminal 12344 "uart4"
+connector Connect sysbus.usart2 uart4
+sysbus LoadELF @firmware/mesh_firmware.elf
+mach set "node4"
+cpu SetRegisterUnsafe 11 4
+
+# Узел 5 (Порт 12345)
+mach create "node5"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+connector Connect sysbus.usart3 radio_hub
+emulation CreateServerSocketTerminal 12345 "uart5"
+connector Connect sysbus.usart2 uart5
+sysbus LoadELF @firmware/mesh_firmware.elf
+mach set "node5"
+cpu SetRegisterUnsafe 11 5
+
+start

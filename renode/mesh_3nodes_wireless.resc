@@ -1,0 +1,62 @@
+# Advanced Renode configuration with wireless medium
+# 3 nodes with LoRa emulation
+
+# Create wireless medium for LoRa communication
+emulation CreateWirelessMedium "lora_medium"
+
+# Configure wireless medium parameters
+lora_medium SetRangeWirelessFunction 100
+
+# Create NODE1 (Time Master)
+mach create "node1"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+
+# Add wireless interface to NODE1
+machine LoadPlatformDescriptionFromString "lora: Wireless.IEEE802_15_4 @ sysbus <0x40011000, +0x400> { IRQ -> nvic@28 }"
+connector Connect sysbus.lora lora_medium
+
+sysbus LoadELF @firmware/mesh_firmware.elf
+sysbus.cpu PC `sysbus GetSymbolAddress "Reset_Handler"`
+
+# Create NODE2 (Relay)
+mach create "node2"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+
+# Add wireless interface to NODE2
+machine LoadPlatformDescriptionFromString "lora: Wireless.IEEE802_15_4 @ sysbus <0x40011000, +0x400> { IRQ -> nvic@28 }"
+connector Connect sysbus.lora lora_medium
+
+sysbus LoadELF @firmware/mesh_firmware.elf
+sysbus.cpu PC `sysbus GetSymbolAddress "Reset_Handler"`
+
+# Create NODE3 (End node)
+mach create "node3"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+
+# Add wireless interface to NODE3
+machine LoadPlatformDescriptionFromString "lora: Wireless.IEEE802_15_4 @ sysbus <0x40011000, +0x400> { IRQ -> nvic@28 }"
+connector Connect sysbus.lora lora_medium
+
+sysbus LoadELF @firmware/mesh_firmware.elf
+sysbus.cpu PC `sysbus GetSymbolAddress "Reset_Handler"`
+
+# Setup logging
+logLevel 3
+
+# Setup UART analyzers
+mach set "node1"
+showAnalyzer sysbus.usart2 "NODE1"
+
+mach set "node2"
+showAnalyzer sysbus.usart2 "NODE2"
+
+mach set "node3"
+showAnalyzer sysbus.usart2 "NODE3"
+
+# Start emulation
+start
+
+echo "Mesh network started with wireless medium"
+echo "NODE1: Time Master (ID=1)"
+echo "NODE2: Relay (ID=2)"
+echo "NODE3: End node (ID=3)"

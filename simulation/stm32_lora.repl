@@ -1,0 +1,7 @@
+
+using "platforms/cpus/stm32f4.repl"
+
+// Используем IEEE802_15_4_Radio, который точно есть в Renode 1.16.1
+radio: Wireless.IEEE802_15_4_Radio @ spi2
+    -> gpioPortB@12 // NSS
+    IRQ -> gpioPortC@6

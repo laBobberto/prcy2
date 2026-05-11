@@ -1,0 +1,32 @@
+# Simple Renode configuration for 3 STM32F4 nodes
+# Tests basic firmware functionality
+
+using sysbus
+
+# NODE1 - Time Master
+mach create "node1"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+sysbus LoadELF @firmware/mesh_firmware.elf
+
+# NODE2 - Relay
+mach create "node2"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+sysbus LoadELF @firmware/mesh_firmware.elf
+
+# NODE3 - End node
+mach create "node3"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+sysbus LoadELF @firmware/mesh_firmware.elf
+
+# Enable UART output for all nodes
+mach set "node1"
+showAnalyzer sysbus.usart2
+
+mach set "node2"
+showAnalyzer sysbus.usart2
+
+mach set "node3"
+showAnalyzer sysbus.usart2
+
+# Start all machines
+start

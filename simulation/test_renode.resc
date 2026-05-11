@@ -1,0 +1,21 @@
+
+using sysbus
+
+# Узел 1
+mach create "node1"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+sysbus.usart2 CreateFileBackend @node1_uart.log true
+sysbus LoadELF @firmware/mesh_firmware.elf
+sysbus WriteByte 0x20000000 1
+
+# Узел 2
+mach create "node2"
+machine LoadPlatformDescription @platforms/cpus/stm32f4.repl
+sysbus.usart2 CreateFileBackend @node2_uart.log true
+sysbus LoadELF @firmware/mesh_firmware.elf
+sysbus WriteByte 0x20000000 2
+
+start
+# Даем поработать 3 секунды и выходим
+emulation RunFor "00:00:03"
+quit

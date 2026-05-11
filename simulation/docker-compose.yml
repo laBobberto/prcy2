@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  gateway:
+    build: .
+    network_mode: host
+    environment:
+      - NODE_ID=GATEWAY
+      - PORT=5000
+      - NEIGHBORS=5001
+    stdin_open: true
+    tty: true
+
+  node1:
+    build: .
+    network_mode: host
+    environment:
+      - NODE_ID=NODE1
+      - PORT=5001
+      - NEIGHBORS=5000,5002
+
+  node2:
+    build: .
+    network_mode: host
+    environment:
+      - NODE_ID=NODE2
+      - PORT=5002
+      - NEIGHBORS=5001
