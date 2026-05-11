@@ -401,21 +401,10 @@ class MeshConfiguratorQt(QMainWindow):
         right_layout = QVBoxLayout()
         right_panel.setLayout(right_layout)
 
-        # Заголовок
-        title_label = QLabel("Визуализация сети")
-        title_label.setFont(QFont("Arial", 14, QFont.Bold))
-        title_label.setAlignment(Qt.AlignCenter)
-        right_layout.addWidget(title_label)
-
         # Граф сети
         self.graph_widget = NetworkGraphWidget()
         self.graph_widget.node_clicked.connect(self.on_node_clicked)
         right_layout.addWidget(self.graph_widget)
-
-        # Подсказка
-        hint_label = QLabel("💡 Кликните на узел для открытия консоли")
-        hint_label.setAlignment(Qt.AlignCenter)
-        right_layout.addWidget(hint_label)
 
         main_layout.addWidget(right_panel)
 
