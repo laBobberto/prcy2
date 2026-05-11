@@ -84,7 +84,7 @@ int main(void) {
                 cmd_buf[cmd_idx++] = c;
             }
         }
-        for(volatile int i=0; i<10; i++); 
+        for(volatile int i=0; i<100000; i++); 
     }
     return 0;
 }

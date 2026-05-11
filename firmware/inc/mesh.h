@@ -81,6 +81,7 @@ void mesh_add_route(uint8_t dest_id, uint8_t next_hop, uint8_t hop_count, uint32
 void mesh_update_route_lifetime(uint8_t dest_id);
 void mesh_invalidate_route(uint8_t dest_id);
 void mesh_cleanup_routes(void);
+void mesh_cleanup_old_data(void);
 void mesh_send_rreq(uint8_t dest_id);
 void mesh_process_rreq(mesh_packet_t *pkt, uint8_t from_node);
 void mesh_process_rrep(mesh_packet_t *pkt, uint8_t from_node);

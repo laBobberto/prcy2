@@ -19,15 +19,12 @@ except ImportError:
     print("Error: PyQt5 is not installed. Run: pip install PyQt5")
     sys.exit(1)
 
-# Import NetworkTopology from the original configurator if possible, 
-# or just redefine it for simplicity.
-# We'll redefine a simplified version or reuse the one from mesh_configurator_qt.
-from mesh_configurator_qt import NetworkTopology, NetworkGraphWidget, ConsoleDialog, MessageSignal
+from mesh_configurator_qt import NetworkTopology, NetworkGraphWidget, MessageSignal
 
 class RenodeNodeProxy(QObject):
     """Proxy for an STM32 node running inside Renode"""
     message_received = pyqtSignal(str, str, str, bool) # receiver_id, sender_id, message, e2e
-    output_received = pyqtSignal(str)
+    log_updated = pyqtSignal(str)
 
     def __init__(self, node_id, port):
         super().__init__()
@@ -47,45 +44,37 @@ class RenodeNodeProxy(QObject):
             self.thread = threading.Thread(target=self._listen, daemon=True)
             self.thread.start()
             return True
-        except Exception as e:
-            print(f"Failed to connect to {self.node_id} on port {self.port}: {e}")
+        except Exception:
             return False
 
     def _listen(self):
         buffer = ""
         while self.running:
             try:
-                data = self.sock.recv(1024).decode('utf-8', errors='ignore')
+                data = self.sock.recv(4096).decode('utf-8', errors='ignore')
                 if not data:
                     break
                 
-                buffer += data
                 self.full_log += data
-                self.output_received.emit(data)
+                self.log_updated.emit(data)
 
-                # Parse lines for messages
+                buffer += data
                 while '\n' in buffer:
                     line, buffer = buffer.split('\n', 1)
                     line = line.strip()
                     
-                    # Pattern: *** E2E MSG FROM NODE 1: [hello] ***
-                    e2e_match = re.search(r"\*\*\* E2E MSG FROM NODE (\d+): \[(.*?)\] \*\*\*", line)
-                    if e2e_match:
-                        sender_id = f"NODE{e2e_match.group(1)}"
-                        msg = e2e_match.group(2)
-                        self.message_received.emit(self.node_id, sender_id, msg, True)
-                        continue
-
-                    link_match = re.search(r"\*\*\* LINK MSG FROM NODE (\d+): \[(.*?)\] \*\*\*", line)
-                    if link_match:
-                        sender_id = f"NODE{link_match.group(1)}"
-                        msg = link_match.group(2)
-                        self.message_received.emit(self.node_id, sender_id, msg, False)
+                    # Pattern matching: *** E2E/LINK MSG FROM NODE X: [msg]
+                    match = re.search(r"\*\*\* (E2E|LINK) MSG FROM NODE (\d+): \[(.*?)\]", line, re.IGNORECASE)
+                    if match:
+                        msg_type = match.group(1).upper()
+                        sender_id = f"NODE{match.group(2)}"
+                        msg = match.group(3)
+                        is_e2e = (msg_type == "E2E")
+                        self.message_received.emit(self.node_id, sender_id, msg, is_e2e)
 
             except socket.timeout:
                 continue
-            except Exception as e:
-                print(f"Error in listener for {self.node_id}: {e}")
+            except Exception:
                 break
         self.running = False
 
@@ -93,13 +82,44 @@ class RenodeNodeProxy(QObject):
         if self.sock and self.running:
             try:
                 self.sock.send((cmd + "\n").encode())
-            except Exception as e:
-                print(f"Failed to send command to {self.node_id}: {e}")
+            except Exception:
+                pass
 
     def disconnect(self):
         self.running = False
         if self.sock:
-            self.sock.close()
+            try:
+                self.sock.close()
+            except:
+                pass
+
+class ConsoleRenodeDialog(QDialog):
+    def __init__(self, parent, node_id, proxy):
+        super().__init__(parent)
+        self.node_id = node_id
+        self.proxy = proxy
+        self.setWindowTitle(f"Консоль {node_id} (Renode)")
+        self.resize(800, 500)
+        layout = QVBoxLayout()
+        self.text_edit = QTextEdit()
+        self.text_edit.setReadOnly(True)
+        self.text_edit.setStyleSheet("background-color: black; color: #00ff00; font-family: 'Courier New';")
+        self.text_edit.setPlainText(proxy.full_log)
+        layout.addWidget(self.text_edit)
+        self.setLayout(layout)
+        self.proxy.log_updated.connect(self.append_text)
+
+    def append_text(self, text):
+        self.text_edit.insertPlainText(text)
+        sb = self.text_edit.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def closeEvent(self, event):
+        try:
+            self.proxy.log_updated.disconnect(self.append_text)
+        except:
+            pass
+        super().closeEvent(event)
 
 class MeshConfiguratorRenode(QMainWindow):
     def __init__(self):
@@ -109,27 +129,26 @@ class MeshConfiguratorRenode(QMainWindow):
         self.renode_process = None
         self.msg_signal = MessageSignal()
         self.msg_signal.received.connect(self.show_received_message)
+        self.temp_resc_path = None
         
         self.init_ui()
         self.apply_styles()
 
     def init_ui(self):
-        self.setWindowTitle("Mesh Network Configurator - Renode Edition (STM32)")
-        self.setGeometry(100, 100, 1400, 800)
+        self.setWindowTitle("Mesh Network Configurator - Renode Edition")
+        self.setGeometry(100, 100, 1200, 800)
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout()
         central_widget.setLayout(main_layout)
 
-        # Left Panel
         left_panel = QWidget()
         left_layout = QVBoxLayout()
         left_panel.setLayout(left_layout)
         left_panel.setFixedWidth(350)
 
-        # Config Group
-        config_group = QGroupBox("Renode STM32 Network")
+        config_group = QGroupBox("Renode Network Control")
         config_layout = QVBoxLayout()
         
         nodes_input_layout = QHBoxLayout()
@@ -140,7 +159,7 @@ class MeshConfiguratorRenode(QMainWindow):
         nodes_input_layout.addWidget(self.num_nodes_spin)
         config_layout.addLayout(nodes_input_layout)
 
-        self.start_btn = QPushButton("🚀 Launch Renode Network")
+        self.start_btn = QPushButton("🚀 Start Renode")
         self.start_btn.clicked.connect(self.start_renode)
         config_layout.addWidget(self.start_btn)
 
@@ -152,23 +171,22 @@ class MeshConfiguratorRenode(QMainWindow):
         config_group.setLayout(config_layout)
         left_layout.addWidget(config_group)
 
-        # Message Group
-        msg_group = QGroupBox("Send Message (LoRa)")
+        msg_group = QGroupBox("Mesh Messaging")
         msg_layout = QVBoxLayout()
         
         self.sender_combo = QComboBox()
         self.receiver_combo = QComboBox()
         self.msg_input = QLineEdit()
-        self.msg_input.setPlaceholderText("Message content...")
+        self.msg_input.setPlaceholderText("Hello Mesh!")
         
-        msg_layout.addWidget(QLabel("From:"))
+        msg_layout.addWidget(QLabel("Sender:"))
         msg_layout.addWidget(self.sender_combo)
-        msg_layout.addWidget(QLabel("To:"))
+        msg_layout.addWidget(QLabel("Destination:"))
         msg_layout.addWidget(self.receiver_combo)
         msg_layout.addWidget(QLabel("Message:"))
         msg_layout.addWidget(self.msg_input)
         
-        self.send_btn = QPushButton("📤 Send via Mesh")
+        self.send_btn = QPushButton("📤 Send Data")
         self.send_btn.clicked.connect(self.send_message)
         self.send_btn.setEnabled(False)
         msg_layout.addWidget(self.send_btn)
@@ -178,50 +196,47 @@ class MeshConfiguratorRenode(QMainWindow):
 
         self.info_text = QTextEdit()
         self.info_text.setReadOnly(True)
-        left_layout.addWidget(QLabel("Network Status:"))
+        left_layout.addWidget(QLabel("Status & Events:"))
         left_layout.addWidget(self.info_text)
 
         main_layout.addWidget(left_panel)
 
-        # Right Panel - Graph
         self.graph_widget = NetworkGraphWidget()
         self.graph_widget.node_clicked.connect(self.on_node_clicked)
         main_layout.addWidget(self.graph_widget, 1)
 
     def apply_styles(self):
         self.setStyleSheet("""
-            QMainWindow, QWidget { background-color: #1e1e1e; color: white; }
-            QGroupBox { border: 1px solid #3d3d3d; border-radius: 5px; margin-top: 10px; padding: 10px; font-weight: bold; }
-            QPushButton { background-color: #333; border: 1px solid #555; padding: 8px; border-radius: 4px; }
-            QPushButton:hover { background-color: #444; }
-            QPushButton:disabled { color: #666; background-color: #222; }
-            QLineEdit, QSpinBox, QComboBox { background-color: #2d2d2d; border: 1px solid #3d3d3d; padding: 4px; color: white; }
-            QTextEdit { background-color: #000; color: #0f0; font-family: 'Courier New'; border: 1px solid #3d3d3d; }
+            QMainWindow, QWidget { background-color: #2b2b2b; color: white; }
+            QGroupBox { border: 1px solid #555; border-radius: 5px; margin-top: 10px; padding: 10px; font-weight: bold; }
+            QPushButton { background-color: #444; border: 1px solid #666; padding: 8px; border-radius: 4px; }
+            QPushButton:hover { background-color: #555; }
+            QPushButton:disabled { color: #888; background-color: #333; }
+            QLineEdit, QSpinBox, QComboBox { background-color: #333; border: 1px solid #555; padding: 4px; color: white; }
+            QTextEdit { background-color: #111; color: #0f0; font-family: 'Courier New'; }
         """)
 
     def start_renode(self):
         num_nodes = self.num_nodes_spin.value()
+        self.stop_renode() # Ensure clean start
         
-        # 1. Generate .resc file
         resc_content = self.generate_resc(num_nodes)
-        self.temp_resc = tempfile.NamedTemporaryFile(suffix=".resc", delete=False)
-        self.temp_resc.write(resc_content.encode())
-        self.temp_resc.close()
+        with tempfile.NamedTemporaryFile(suffix=".resc", delete=False) as f:
+            f.write(resc_content.encode())
+            self.temp_resc_path = f.name
         
-        # 2. Launch Renode
-        self.info_text.append("Starting Renode...")
+        self.info_text.append(f"Starting Renode with {num_nodes} nodes...")
         self.renode_process = QProcess()
-        self.renode_process.start("renode", ["--plain", "--hide-log", self.temp_resc.name])
+        self.renode_process.start("renode", ["--plain", "--hide-log", self.temp_resc_path])
         
-        # 3. Wait and connect proxies
-        QTimer.singleShot(3000, lambda: self.connect_to_nodes(num_nodes))
+        self.conn_attempts = 0
+        self.target_nodes = num_nodes
+        QTimer.singleShot(2000, self.attempt_connection)
 
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         
-        # Create topology for visualization
         self.topology = NetworkTopology(num_nodes)
-        # For Renode, we assume a chain or a star for now based on the resc hub
         self.topology.generate_random_topology('medium')
         self.graph_widget.set_topology(self.topology)
         
@@ -230,15 +245,37 @@ class MeshConfiguratorRenode(QMainWindow):
         self.sender_combo.addItems(self.topology.nodes)
         self.receiver_combo.addItems(self.topology.nodes)
 
+    def attempt_connection(self):
+        self.conn_attempts += 1
+        connected_count = 0
+        for i in range(1, self.target_nodes + 1):
+            node_id = f"NODE{i}"
+            if node_id in self.nodes and self.nodes[node_id].running:
+                connected_count += 1
+                continue
+                
+            port = 12340 + i
+            proxy = RenodeNodeProxy(node_id, port)
+            if proxy.connect():
+                proxy.message_received.connect(lambda r, s, m, e: self.msg_signal.received.emit(r, s, m, e))
+                self.nodes[node_id] = proxy
+                connected_count += 1
+        
+        if connected_count < self.target_nodes and self.conn_attempts < 10:
+            QTimer.singleShot(1000, self.attempt_connection)
+        else:
+            self.info_text.append(f"Connected to {connected_count}/{self.target_nodes} nodes.")
+            if connected_count > 0:
+                self.send_btn.setEnabled(True)
+
     def generate_resc(self, num_nodes):
-        # Base path to firmware and platform
         root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         firmware = os.path.join(root_dir, "firmware", "mesh_firmware.elf")
         
         resc = 'emulation CreateUARTHub "radio_hub"\n'
         for i in range(1, num_nodes + 1):
             port = 12340 + i
-            resc += f'\n# Node {i}\nmach create "node{i}"\n'
+            resc += f'\nmach create "node{i}"\n'
             resc += 'machine LoadPlatformDescription @platforms/cpus/stm32f4.repl\n'
             resc += 'connector Connect sysbus.usart3 radio_hub\n'
             resc += f'emulation CreateServerSocketTerminal {port} "uart{i}"\n'
@@ -250,21 +287,6 @@ class MeshConfiguratorRenode(QMainWindow):
         resc += "\nstart\n"
         return resc
 
-    def connect_to_nodes(self, num_nodes):
-        connected_count = 0
-        for i in range(1, num_nodes + 1):
-            node_id = f"NODE{i}"
-            port = 12340 + i
-            proxy = RenodeNodeProxy(node_id, port)
-            if proxy.connect():
-                proxy.message_received.connect(lambda r, s, m, e: self.msg_signal.received.emit(r, s, m, e))
-                self.nodes[node_id] = proxy
-                connected_count += 1
-        
-        self.info_text.append(f"Connected to {connected_count}/{num_nodes} nodes.")
-        if connected_count > 0:
-            self.send_btn.setEnabled(True)
-
     def stop_renode(self):
         for proxy in self.nodes.values():
             proxy.disconnect()
@@ -272,10 +294,14 @@ class MeshConfiguratorRenode(QMainWindow):
         
         if self.renode_process:
             self.renode_process.terminate()
+            if not self.renode_process.waitForFinished(2000):
+                self.renode_process.kill()
             self.renode_process = None
             
-        if hasattr(self, 'temp_resc'):
-            os.unlink(self.temp_resc.name)
+        if self.temp_resc_path and os.path.exists(self.temp_resc_path):
+            try: os.unlink(self.temp_resc_path)
+            except: pass
+            self.temp_resc_path = None
             
         self.info_text.append("Renode stopped.")
         self.start_btn.setEnabled(True)
@@ -286,39 +312,23 @@ class MeshConfiguratorRenode(QMainWindow):
         sender_id = self.sender_combo.currentText()
         receiver_id = self.receiver_combo.currentText()
         message = self.msg_input.text()
-        
-        if not message:
-            return
+        if not message or sender_id not in self.nodes: return
             
-        if sender_id not in self.nodes:
-            return
-            
-        # Format for firmware: s <dst_id_digit> <msg>
         dst_digit = receiver_id.replace("NODE", "")
-        cmd = f"s {dst_digit} {message}"
-        self.nodes[sender_id].send_command(cmd)
-        
-        QMessageBox.information(self, "Command Sent", f"Sent to {sender_id}: {cmd}")
+        self.nodes[sender_id].send_command(f"s {dst_digit} {message}")
+        self.info_text.append(f"Command sent: {sender_id} -> {receiver_id}: {message}")
         self.msg_input.clear()
 
     def show_received_message(self, receiver_id, sender_id, message, e2e):
-        enc_type = "E2E (Secure)" if e2e else "Link-layer only"
-        QMessageBox.information(self, f"Message Received @ {receiver_id}", 
-                              f"From: {sender_id}\nType: {enc_type}\n\nContent: {message}")
+        enc = "E2E" if e2e else "Link"
+        self.info_text.append(f"MSG received: {sender_id} -> {receiver_id} ({enc}): {message}")
+        QMessageBox.information(self, f"New Message @ {receiver_id}", 
+                              f"From: {sender_id}\nType: {enc}\nContent: {message}")
 
     def on_node_clicked(self, node_id):
         if node_id in self.nodes:
-            # Show a simple log dialog
-            log_dialog = QDialog(self)
-            log_dialog.setWindowTitle(f"Log: {node_id}")
-            layout = QVBoxLayout()
-            text = QTextEdit()
-            text.setReadOnly(True)
-            text.setPlainText(self.nodes[node_id].full_log)
-            layout.addWidget(text)
-            log_dialog.setLayout(layout)
-            log_dialog.resize(600, 400)
-            log_dialog.exec_()
+            dialog = ConsoleRenodeDialog(self, node_id, self.nodes[node_id])
+            dialog.show()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

@@ -26,14 +26,20 @@ void lora_send_packet(mesh_packet_t *pkt) {
 }
 
 int lora_check_receive(mesh_packet_t *pkt) {
-    // Если в буфере USART3 есть данные
+    // Если в буфере USART3 нет данных (проверка первого байта)
     if (!(USART3_SR & (1 << 5))) return 0;
 
     uint8_t *ptr = (uint8_t *)pkt;
     for (int i = 0; i < sizeof(mesh_packet_t); i++) {
-        while (!(USART3_SR & (1 << 5))); // Ждем RXNE
+        // Ждем RXNE для каждого байта, но с небольшим таймаутом, чтобы не зависнуть
+        uint32_t timeout = 10000;
+        while (!(USART3_SR & (1 << 5)) && timeout > 0) timeout--;
+
+        if (timeout == 0) return 0; // Пакет не долетел полностью
+
         ptr[i] = (uint8_t)(USART3_DR & 0xFF);
     }
     debug_puts("[V-RADIO] Packet captured from hub!\n");
     return 1;
 }
+
