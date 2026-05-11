@@ -28,6 +28,7 @@ class MeshNode:
         self.self_seq_num = 0
         self.rreq_id = 0
         self.last_cleanup_time = 0
+        self.message_callbacks = []
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(('0.0.0.0', self.udp_port))
@@ -389,6 +390,8 @@ class MeshNode:
                         try:
                             msg = decrypted.decode('utf-8').rstrip(chr(0))
                             log(f"[{self.node_id}] ✓ E2E MESSAGE FROM {packet['src']}: {msg}")
+                            for cb in self.message_callbacks:
+                                cb(packet['src'], msg, True)
                         except UnicodeDecodeError:
                             log(f"[{self.node_id}] ✓ E2E MESSAGE FROM {packet['src']}: [binary data]")
                     else:
@@ -398,6 +401,8 @@ class MeshNode:
                         try:
                             msg = decrypted.decode('utf-8').rstrip(chr(0))
                             log(f"[{self.node_id}] LINK MESSAGE FROM {packet['src']}: {msg}")
+                            for cb in self.message_callbacks:
+                                cb(packet['src'], msg, False)
                         except UnicodeDecodeError:
                             log(f"[{self.node_id}] LINK MESSAGE FROM {packet['src']}: [binary data]")
                 except Exception as e:

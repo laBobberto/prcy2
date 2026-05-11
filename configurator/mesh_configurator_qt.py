@@ -286,6 +286,10 @@ class ConsoleDialog(QDialog):
 
         self.console_text.setText(info)
 
+class MessageSignal(QObject):
+    """Сигнал для передачи сообщений между потоками"""
+    received = pyqtSignal(str, str, str, bool) # receiver_id, sender_id, message, e2e
+
 class MeshConfiguratorQt(QMainWindow):
     """Главное окно конфигуратора"""
 
@@ -297,6 +301,8 @@ class MeshConfiguratorQt(QMainWindow):
         self.topology = None
         self.base_port = 7000
         self.running = False
+        self.msg_signal = MessageSignal()
+        self.msg_signal.received.connect(self.show_received_message)
 
         self.init_ui()
         self.apply_dark_theme()
@@ -517,6 +523,12 @@ class MeshConfiguratorQt(QMainWindow):
             is_time_master = (i == 0)
             node = MeshNode(node_id, port, neighbor_ports, is_time_master)
 
+            # Добавляем callback для уведомления о сообщении
+            def make_callback(nid):
+                return lambda sender, msg, e2e: self.msg_signal.received.emit(nid, sender, msg, e2e)
+            
+            node.message_callbacks.append(make_callback(node_id))
+
             # Устанавливаем E2E ключи (симметричные)
             for other_node_id in self.topology.nodes:
                 if other_node_id != node_id:
@@ -622,11 +634,21 @@ class MeshConfiguratorQt(QMainWindow):
                               f"Сообщение отправлено\n"
                               f"От: {sender}\n"
                               f"Кому: {receiver}\n"
+                              f"Содержимое: {message}\n"
                               f"E2E: {e2e_encrypted}\n"
                               f"E2E MIC: {pkt['e2e_mic']}\n"
                               f"Link MIC: {pkt['link_mic']}")
 
         self.message_input.clear()
+
+    def show_received_message(self, receiver_id, sender_id, message, e2e):
+        """Показать всплывающее окно при получении сообщения"""
+        encryption_type = "E2E (Зашифровано)" if e2e else "Link (Общее шифрование)"
+        QMessageBox.information(self, f"Получено сообщение: {receiver_id}",
+                              f"Узел {receiver_id} получил сообщение\n"
+                              f"От: {sender_id}\n"
+                              f"Тип: {encryption_type}\n\n"
+                              f"Содержимое: \"{message}\"")
 
     def on_node_clicked(self, node_id):
         if node_id not in self.nodes:
