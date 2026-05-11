@@ -212,7 +212,9 @@ class RenodeNodeProxy(QObject):
 
     def disconnect(self):
         self.running = False
-        if self.sock: self.sock.close()
+        if self.sock:
+            try: self.sock.close()
+            except: pass
 
 class ConsoleRenodeDialog(QDialog):
     def __init__(self, parent, node_id, proxy):
@@ -289,6 +291,12 @@ class MeshConfiguratorRenode(QMainWindow):
         self.stop_btn.clicked.connect(self.stop_network)
         self.stop_btn.setEnabled(False)
         config_layout.addWidget(self.stop_btn)
+
+        self.retry_conn_btn = QPushButton("🔄 Переподключить узлы")
+        self.retry_conn_btn.clicked.connect(self.manual_retry_connection)
+        self.retry_conn_btn.setEnabled(False)
+        config_layout.addWidget(self.retry_conn_btn)
+
         left_layout.addWidget(config_group)
 
         message_group = QGroupBox("Отправка сообщений")
@@ -354,12 +362,13 @@ class MeshConfiguratorRenode(QMainWindow):
         root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         firmware = os.path.join(root_dir, "firmware", "mesh_firmware.elf")
         
-        resc = 'emulation CreateUARTHub "radio_hub"\n'
+        resc = 'emulation SetGlobalSerialExecution true\n'
+        resc += 'emulation CreateUARTHub "radio_hub"\n'
         for i in range(1, num_nodes + 1):
             port = 12340 + i
             resc += f'\nmach create "node{i}"\nmachine LoadPlatformDescription @platforms/cpus/stm32f4.repl\n'
             resc += f'connector Connect sysbus.usart3 radio_hub\nemulation CreateServerSocketTerminal {port} "uart{i}"\n'
-            resc += f'connector Connect sysbus.usart2 uart{i}\nsysbus LoadELF @{firmware}\n'
+            resc += f'connector Connect sysbus.usart2 uart{i}\nshowAnalyzer sysbus.usart2\nsysbus LoadELF @{firmware}\n'
             resc += f'mach set "node{i}"\ncpu SetRegisterUnsafe 11 {i}\n'
         resc += "\nstart\n"
 
@@ -367,30 +376,60 @@ class MeshConfiguratorRenode(QMainWindow):
         self.temp_resc.write(resc.encode()); self.temp_resc.close()
 
         self.renode_process = QProcess()
+        self.renode_process.setProcessChannelMode(QProcess.MergedChannels)
+        self.renode_process.readyReadStandardOutput.connect(self.read_renode_output)
         self.renode_process.start("renode", ["--plain", "--hide-log", self.temp_resc.name])
         
         self.info_text.append("Запуск Renode...")
+        self.conn_attempts = 0
+        self.target_nodes = num_nodes
+        self.retry_conn_btn.setEnabled(True)
         QTimer.singleShot(3000, self.connect_proxies)
         self.start_btn.setEnabled(False); self.stop_btn.setEnabled(True)
 
+    def read_renode_output(self):
+        if self.renode_process:
+            data = self.renode_process.readAllStandardOutput().data().decode(errors='ignore')
+            if "error" in data.lower() or "fail" in data.lower():
+                self.info_text.append(f"Renode Error: {data.strip()[:100]}...")
+
+    def manual_retry_connection(self):
+        self.conn_attempts = 0
+        self.info_text.append("Ручное переподключение...")
+        self.connect_proxies()
+
     def connect_proxies(self):
+        self.conn_attempts += 1
         connected = 0
-        for i in range(1, len(self.topology.nodes) + 1):
+        for i in range(1, self.target_nodes + 1):
             node_id = f"NODE{i}"
+            if node_id in self.nodes and self.nodes[node_id].running:
+                connected += 1
+                continue
             proxy = RenodeNodeProxy(node_id, 12340 + i)
             if proxy.connect():
                 proxy.message_received.connect(lambda r, s, m, e: self.msg_signal.received.emit(r, s, m, e))
                 self.nodes[node_id] = proxy
                 connected += 1
-        self.info_text.append(f"Подключено {connected} узлов Renode.")
-        if connected > 0: self.send_btn.setEnabled(True)
+        
+        if connected < self.target_nodes and self.conn_attempts < 10:
+            self.info_text.append(f"Ожидание узлов ({connected}/{self.target_nodes})...")
+            QTimer.singleShot(1000, self.connect_proxies)
+        else:
+            self.info_text.append(f"Подключено {connected} узлов Renode.")
+            if connected > 0: self.send_btn.setEnabled(True)
 
     def stop_network(self):
         for p in self.nodes.values(): p.disconnect()
         self.nodes.clear()
-        if self.renode_process: self.renode_process.terminate()
-        if self.temp_resc: os.unlink(self.temp_resc.name)
+        if self.renode_process: 
+            self.renode_process.terminate()
+            if not self.renode_process.waitForFinished(2000): self.renode_process.kill()
+        if self.temp_resc: 
+            try: os.unlink(self.temp_resc.name)
+            except: pass
         self.start_btn.setEnabled(True); self.stop_btn.setEnabled(False); self.send_btn.setEnabled(False)
+        self.retry_conn_btn.setEnabled(False)
         self.info_text.append("Сеть остановлена.")
 
     def send_message(self):
