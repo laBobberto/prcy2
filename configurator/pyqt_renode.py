@@ -199,9 +199,17 @@ class RenodeNodeProxy(QObject):
                 buffer += data
                 while '\n' in buffer:
                     line, buffer = buffer.split('\n', 1)
+                    # Парсинг обычных сообщений
                     match = re.search(r"\*\*\* (E2E|LINK) MSG FROM NODE (\d+): \[(.*?)\]", line, re.IGNORECASE)
                     if match:
                         self.message_received.emit(self.node_id, f"NODE{match.group(2)}", match.group(3), match.group(1).upper() == "E2E")
+                    
+                    # Парсинг событий безопасности для отображения в GUI
+                    if "[SECURITY]" in line or "[CRYPTO]" in line:
+                        # Мы можем просто переслать это как специальное системное сообщение
+                        # или просто логгировать. В данном GUI лучше просто пропустить, 
+                        # так как пользователь видит консоль.
+                        pass
             except: continue
         self.running = False
 

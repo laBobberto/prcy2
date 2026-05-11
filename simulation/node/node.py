@@ -8,6 +8,8 @@ import base64
 import sys
 from .crypto import Kuznyechik
 
+from .crypto import Kuznyechik, X25519Auth, Ed25519Auth, serialization
+
 def log(msg):
     print(msg)
     sys.stdout.flush()
@@ -22,6 +24,7 @@ class MeshNode:
         self.seen_rreq = {}
         self.session_crypto = Kuznyechik(b"MASTER_KEY_2026_STAY_SAFE_!!!!!")
         self.pairwise_keys = {}
+        self.pairwise_packet_counts = {}
         self.internal_clock = 0
         self.is_time_master = is_time_master
         self.time_sync_counter = 0
@@ -30,6 +33,19 @@ class MeshNode:
         self.last_cleanup_time = 0
         self.message_callbacks = []
 
+        # DH State
+        self.dh_ephemeral_priv = None
+        self.dh_ephemeral_pub_bytes = None
+        self.dh_in_progress = set()
+        
+        # Identity keys (Ed25519)
+        # For simulation, derive from node_id
+        dummy_seed = bytes([self._node_id_to_int(self.node_id)] * 32)
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+        self.identity_priv = ed25519.Ed25519PrivateKey.from_private_bytes(dummy_seed)
+        self.identity_pub = self.identity_priv.public_key()
+        self.node_identity_pubs = {}
+
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(('0.0.0.0', self.udp_port))
 
@@ -37,9 +53,119 @@ class MeshNode:
         if is_time_master:
             log(f"[{self.node_id}] This node is TIME MASTER")
 
+    def _node_id_to_int(self, node_id):
+        if isinstance(node_id, str):
+            if node_id.startswith("NODE"):
+                return int(node_id[4:])
+            elif node_id == "GATEWAY":
+                return 1
+            else:
+                return ord(node_id[0])
+        return node_id
+
     def set_pairwise_key(self, peer_id, key):
         self.pairwise_keys[peer_id] = Kuznyechik(key)
+        self.pairwise_packet_counts[peer_id] = 0
         log(f"[{self.node_id}] Pairwise key set for {peer_id}")
+
+    def init_dh(self, peer_id):
+        if peer_id == self.node_id or peer_id in self.dh_in_progress:
+            return
+
+        log(f"[{self.node_id}] [CRYPTO] Initiating Authenticated DH with {peer_id}")
+        self.dh_ephemeral_priv, pub = X25519Auth.generate_key_pair()
+        self.dh_ephemeral_pub_bytes = pub.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw
+        )
+        self.dh_in_progress.add(peer_id)
+
+        # Signature of ephemeral pub key
+        signature = Ed25519Auth.sign(self.identity_priv, self.dh_ephemeral_pub_bytes)
+
+        pkt = {
+            "src": self.node_id,
+            "dst": peer_id,
+            "type": "DH_REQ",
+            "ttl": 20,
+            "timestamp": self.internal_clock,
+            "payload": base64.b64encode(self.dh_ephemeral_pub_bytes + signature).decode()
+        }
+        self.send_packet(pkt)
+
+    def process_dh_req(self, packet):
+        peer_id = packet['src']
+        log(f"[{self.node_id}] [CRYPTO] Received DH_REQ from {peer_id}")
+
+        payload = base64.b64decode(packet['payload'])
+        peer_pub_bytes = payload[:32]
+        peer_sig = payload[32:96]
+
+        # In a real system, we'd verify the signature here if we know the peer's identity pubkey
+        # For simulation, we'll assume we know it (derived from peer_id)
+        peer_int_id = self._node_id_to_int(peer_id)
+        peer_identity_seed = bytes([peer_int_id] * 32)
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+        peer_identity_pub = ed25519.Ed25519PrivateKey.from_private_bytes(peer_identity_seed).public_key()
+        
+        try:
+            peer_identity_pub.verify(peer_sig, peer_pub_bytes)
+            log(f"[{self.node_id}] [SECURITY] DH_REQ signature verified")
+        except:
+            log(f"[{self.node_id}] [SECURITY] DH_REQ signature verification FAILED!")
+            return
+
+        my_priv, my_pub = X25519Auth.generate_key_pair()
+        my_pub_bytes = my_pub.public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw
+        )
+        shared_secret = X25519Auth.get_shared_secret(my_priv, peer_pub_bytes)
+        
+        self.set_pairwise_key(peer_id, shared_secret)
+
+        # Respond with DH_REP
+        signature = Ed25519Auth.sign(self.identity_priv, my_pub_bytes)
+        
+        rep = {
+            "src": self.node_id,
+            "dst": peer_id,
+            "type": "DH_REP",
+            "ttl": 20,
+            "timestamp": self.internal_clock,
+            "payload": base64.b64encode(my_pub_bytes + signature).decode()
+        }
+        self.send_packet(rep)
+
+    def process_dh_rep(self, packet):
+        peer_id = packet['src']
+        if peer_id not in self.dh_in_progress:
+            log(f"[{self.node_id}] [CRYPTO] Unsolicited DH_REP from {peer_id}, ignoring")
+            return
+
+        log(f"[{self.node_id}] [CRYPTO] Received DH_REP from {peer_id}")
+        
+        payload = base64.b64decode(packet['payload'])
+        peer_pub_bytes = payload[:32]
+        peer_sig = payload[32:96]
+
+        peer_int_id = self._node_id_to_int(peer_id)
+        peer_identity_seed = bytes([peer_int_id] * 32)
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+        peer_identity_pub = ed25519.Ed25519PrivateKey.from_private_bytes(peer_identity_seed).public_key()
+
+        try:
+            peer_identity_pub.verify(peer_sig, peer_pub_bytes)
+            log(f"[{self.node_id}] [SECURITY] DH_REP signature verified")
+        except:
+            log(f"[{self.node_id}] [SECURITY] DH_REP signature verification FAILED!")
+            return
+
+        shared_secret = X25519Auth.get_shared_secret(self.dh_ephemeral_priv, peer_pub_bytes)
+        self.set_pairwise_key(peer_id, shared_secret)
+        self.dh_in_progress.remove(peer_id)
+        self.dh_ephemeral_priv = None
+        self.dh_ephemeral_pub_bytes = None
 
     def discover_neighbors(self, all_nodes):
         """Автоматическое обнаружение прямых соседей и создание маршрутов к ним"""
@@ -414,6 +540,14 @@ class MeshNode:
             self.process_rrep(packet, packet['src'])
             return
 
+        if packet['type'] == 'DH_REQ':
+            self.process_dh_req(packet)
+            return
+
+        if packet['type'] == 'DH_REP':
+            self.process_dh_rep(packet)
+            return
+
         if packet['dst'] == self.node_id:
             if packet['type'] == 'DATA':
                 try:
@@ -486,6 +620,65 @@ class MeshNode:
             log(f"[{self.node_id}] Forwarding packet to {packet['dst']}, TTL={packet['ttl']}")
             self.send_packet(packet)
 
+    def send_data_message(self, dest_id, message_str):
+        """
+        Unified method to send a secure message. 
+        Returns: (status_code, detail_message)
+        Status codes: 0: Success, 1: RREQ initiated, 2: DH initiated, 3: Error
+        """
+        if dest_id == "BROADCAST":
+            e2e_encrypted = False
+        else:
+            # 1. Check Route
+            route = self.find_route(dest_id)
+            if not route:
+                self.send_rreq(dest_id)
+                return 1, f"Route to {dest_id} not found, RREQ initiated"
+
+            # 2. Check/Initiate DH if needed for E2E
+            e2e_encrypted = dest_id in self.pairwise_keys
+            if not e2e_encrypted:
+                self.init_dh(dest_id)
+                return 2, f"E2E key for {dest_id} not found, DH initiated"
+
+        # 3. Prepare Packet
+        msg_bytes = message_str.encode()
+        payload_len = ((len(msg_bytes) + 15) // 16) * 16
+        padded = msg_bytes.ljust(payload_len, b'\0')
+
+        pkt = {
+            "src": self.node_id,
+            "dst": dest_id,
+            "type": "DATA",
+            "ttl": 20,
+            "timestamp": self.internal_clock,
+            "payload": "",
+            "e2e_encrypted": e2e_encrypted,
+            "e2e_mic": 0,
+            "link_mic": 0
+        }
+
+        # 4. Encrypt and compute MICs
+        if e2e_encrypted:
+            encrypted = self.pairwise_keys[dest_id].ctr_crypt(self.internal_clock, padded)
+            pkt['payload'] = base64.b64encode(encrypted).decode()
+            pkt['e2e_mic'] = self.compute_e2e_mic(pkt, self.pairwise_keys[dest_id])
+            
+            # Update packet count for rotation
+            self.pairwise_packet_counts[dest_id] += 1
+            if self.pairwise_packet_counts[dest_id] >= 1000:
+                log(f"[{self.node_id}] Packet limit reached for {dest_id}, triggering rotation")
+                self.init_dh(dest_id)
+        else:
+            encrypted = self.session_crypto.ctr_crypt(self.internal_clock, padded)
+            pkt['payload'] = base64.b64encode(encrypted).decode()
+
+        pkt['link_mic'] = self.compute_link_mic(pkt)
+
+        # 5. Send
+        self.send_packet(pkt)
+        return 0, "Message sent successfully"
+
     def run(self):
         self.sock.settimeout(0.001)
         while True:
@@ -521,6 +714,8 @@ if __name__ == "__main__":
                     padded = content.encode().ljust(payload_len, b'\0')
 
                     e2e_encrypted = dst in node.pairwise_keys
+                    if not e2e_encrypted and dst != "BROADCAST":
+                        node.init_dh(dst)
 
                     pkt = {
                         "src": "GATEWAY",
@@ -539,6 +734,11 @@ if __name__ == "__main__":
                         pkt['e2e_mic'] = node.compute_e2e_mic(pkt, node.pairwise_keys[dst])
                         encrypted = node.pairwise_keys[dst].ctr_crypt(node.internal_clock, padded)
                         pkt['payload'] = base64.b64encode(encrypted).decode()
+                        
+                        node.pairwise_packet_counts[dst] += 1
+                        if node.pairwise_packet_counts[dst] >= 1000:
+                            print(f"Packet limit reached for {dst}, rotating key...")
+                            node.init_dh(dst)
                     else:
                         encrypted = node.session_crypto.ctr_crypt(node.internal_clock, padded)
                         pkt['payload'] = base64.b64encode(encrypted).decode()

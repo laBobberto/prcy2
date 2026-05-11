@@ -239,16 +239,6 @@ class MeshNetwork:
             is_time_master = (i == 0)
             node = MeshNode(node_id, port, neighbor_ports, is_time_master)
 
-            # Устанавливаем E2E ключи (симметричные)
-            for other_node_id in self.topology.nodes:
-                if other_node_id != node_id:
-                    # Используем одинаковый ключ для обеих сторон (меньший ID первым)
-                    if node_id < other_node_id:
-                        key = f"{node_id}_TO_{other_node_id}_KEY_2026".ljust(32, '!')[:32].encode()
-                    else:
-                        key = f"{other_node_id}_TO_{node_id}_KEY_2026".ljust(32, '!')[:32].encode()
-                    node.set_pairwise_key(other_node_id, key)
-
             self.nodes[node_id] = node
 
             thread = threading.Thread(target=node.run, daemon=True)
@@ -288,54 +278,24 @@ class MeshNetwork:
 
         node = self.nodes[sender]
 
-        # Проверяем маршрут
-        route = node.find_route(receiver)
-        if not route:
+        # Используем новый унифицированный метод отправки
+        status, detail = node.send_data_message(receiver, message)
+
+        if status == 1: # RREQ
             print(f"\n⚠ Маршрут к {receiver} не найден")
             print(f"Инициирован поиск маршрута (RREQ)...")
-            node.send_rreq(receiver)
             print("Попробуйте отправить сообщение через 2-3 секунды")
-            return
-
-        # Отправляем данные
-        msg_bytes = message.encode()
-        payload_len = ((len(msg_bytes) + 15) // 16) * 16
-        padded = msg_bytes.ljust(payload_len, b'\0')
-
-        e2e_encrypted = receiver in node.pairwise_keys
-
-        pkt = {
-            "src": sender,
-            "dst": receiver,
-            "type": "DATA",
-            "ttl": 20,
-            "timestamp": node.internal_clock,
-            "payload": "",
-            "e2e_encrypted": e2e_encrypted,
-            "e2e_mic": 0,
-            "link_mic": 0
-        }
-
-        if e2e_encrypted:
-            # Сначала шифруем
-            encrypted = node.pairwise_keys[receiver].ctr_crypt(node.internal_clock, padded)
-            pkt['payload'] = base64.b64encode(encrypted).decode()
-            # Потом вычисляем E2E MIC с зашифрованным payload
-            pkt['e2e_mic'] = node.compute_e2e_mic(pkt, node.pairwise_keys[receiver])
+        elif status == 2: # DH
+            print(f"\n[SECURITY] Защищенный ключ для {receiver} не установлен.")
+            print("Инициирован обмен ключами DH (X25519).")
+            print("Попробуйте отправить сообщение через 1-2 секунды")
+        elif status == 0:
+            print(f"\n✓ Сообщение отправлено")
+            print(f"  От: {sender}")
+            print(f"  Кому: {receiver}")
+            print(f"  E2E шифрование: {receiver in node.pairwise_keys}")
         else:
-            encrypted = node.session_crypto.ctr_crypt(node.internal_clock, padded)
-            pkt['payload'] = base64.b64encode(encrypted).decode()
-
-        pkt['link_mic'] = node.compute_link_mic(pkt)
-
-        node.send_packet(pkt)
-
-        print(f"\n✓ Сообщение отправлено")
-        print(f"  От: {sender}")
-        print(f"  Кому: {receiver}")
-        print(f"  E2E шифрование: {e2e_encrypted}")
-        print(f"  E2E MIC: {pkt['e2e_mic']}")
-        print(f"  Link MIC: {pkt['link_mic']}")
+            print(f"\n✗ Ошибка: {detail}")
 
     def show_console(self, node_id):
         """Показать консоль узла"""

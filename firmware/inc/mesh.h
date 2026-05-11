@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "kuznyechik.h"
 
-#define MAX_PAYLOAD_SIZE 64
+#define MAX_PAYLOAD_SIZE 128
 #define MESH_DEFAULT_TTL 20
 #define MAX_NODES 256
 #define MAX_ROUTES 32
@@ -17,7 +17,9 @@ typedef enum {
     PACKET_TYPE_RREP = 2,
     PACKET_TYPE_TIME = 3,
     PACKET_TYPE_KEY_ROTATION = 4,
-    PACKET_TYPE_RERR = 5
+    PACKET_TYPE_RERR = 5,
+    PACKET_TYPE_DH_REQ = 6,
+    PACKET_TYPE_DH_REP = 7
 } packet_type_t;
 
 typedef enum {

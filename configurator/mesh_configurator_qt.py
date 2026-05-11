@@ -518,16 +518,6 @@ class MeshConfiguratorQt(QMainWindow):
             
             node.message_callbacks.append(make_callback(node_id))
 
-            # Устанавливаем E2E ключи (симметричные)
-            for other_node_id in self.topology.nodes:
-                if other_node_id != node_id:
-                    # Используем одинаковый ключ для обеих сторон (меньший ID первым)
-                    if node_id < other_node_id:
-                        key = f"{node_id}_TO_{other_node_id}_KEY_2026".ljust(32, '!')[:32].encode()
-                    else:
-                        key = f"{other_node_id}_TO_{node_id}_KEY_2026".ljust(32, '!')[:32].encode()
-                    node.set_pairwise_key(other_node_id, key)
-
             self.nodes[node_id] = node
 
             thread = threading.Thread(target=node.run, daemon=True)
@@ -576,57 +566,27 @@ class MeshConfiguratorQt(QMainWindow):
 
         node = self.nodes[sender]
 
-        # Проверяем маршрут
-        route = node.find_route(receiver)
-        if not route:
-            node.send_rreq(receiver)
+        # Используем новый унифицированный метод отправки
+        status, detail = node.send_data_message(receiver, message)
+
+        if status == 1: # RREQ
             QMessageBox.information(self, "Маршрутизация",
                                   f"Маршрут к {receiver} не найден.\n"
                                   f"Инициирован поиск маршрута (RREQ).\n"
                                   f"Попробуйте отправить через 2-3 секунды.")
-            return
-
-        # Отправляем данные
-        msg_bytes = message.encode()
-        payload_len = ((len(msg_bytes) + 15) // 16) * 16
-        padded = msg_bytes.ljust(payload_len, b'\0')
-
-        e2e_encrypted = receiver in node.pairwise_keys
-
-        pkt = {
-            "src": sender,
-            "dst": receiver,
-            "type": "DATA",
-            "ttl": 20,
-            "timestamp": node.internal_clock,
-            "payload": "",
-            "e2e_encrypted": e2e_encrypted,
-            "e2e_mic": 0,
-            "link_mic": 0
-        }
-
-        if e2e_encrypted:
-            # Сначала шифруем
-            encrypted = node.pairwise_keys[receiver].ctr_crypt(node.internal_clock, padded)
-            pkt['payload'] = base64.b64encode(encrypted).decode()
-            # Потом вычисляем E2E MIC с зашифрованным payload
-            pkt['e2e_mic'] = node.compute_e2e_mic(pkt, node.pairwise_keys[receiver])
+        elif status == 2: # DH
+            QMessageBox.information(self, "Безопасность",
+                                  f"Защищенный ключ для {receiver} не установлен.\n"
+                                  f"Инициирован обмен ключами DH (X25519).\n"
+                                  f"Попробуйте отправить через 1-2 секунды.")
+        elif status == 0:
+            # Для отладки в логах всё еще полезно видеть, что E2E сработало
+            e2e = receiver in node.pairwise_keys
+            log_msg = f"[{sender}] Отправлено сообщение для {receiver} (E2E: {e2e})"
+            print(log_msg)
         else:
-            encrypted = node.session_crypto.ctr_crypt(node.internal_clock, padded)
-            pkt['payload'] = base64.b64encode(encrypted).decode()
+            QMessageBox.critical(self, "Ошибка", f"Не удалось отправить сообщение: {detail}")
 
-        pkt['link_mic'] = node.compute_link_mic(pkt)
-
-        node.send_packet(pkt)
-
-        QMessageBox.information(self, "Отправлено",
-                              f"Сообщение отправлено\n"
-                              f"От: {sender}\n"
-                              f"Кому: {receiver}\n"
-                              f"Содержимое: {message}\n"
-                              f"E2E: {e2e_encrypted}\n"
-                              f"E2E MIC: {pkt['e2e_mic']}\n"
-                              f"Link MIC: {pkt['link_mic']}")
 
         self.message_input.clear()
 

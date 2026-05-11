@@ -1,12 +1,20 @@
 #include "mesh.h"
 #include "mesh_crypto.h"
+#include "x25519.h"
+#include "edsign.h"
 #include "debug.h"
 #include <string.h>
 
 static uint8_t self_node_id;
+static uint8_t self_identity_priv[32];
+static uint8_t self_identity_pub[32];
+static uint8_t node_identity_pubs[MAX_NODES][32];
+static uint8_t node_identity_set[MAX_NODES];
+
 static kuznyechik_ctx_t session_crypto;
 static kuznyechik_ctx_t pairwise_keys[MAX_NODES];
 static uint8_t pairwise_keys_set[MAX_NODES];
+static uint32_t pairwise_packet_counts[MAX_NODES];
 static uint8_t master_key[32] = "MASTER_KEY_2026_STAY_SAFE_!!!!!";
 static uint32_t last_timestamps[256];
 static uint32_t internal_clock = 0;
@@ -20,14 +28,172 @@ static uint32_t rreq_id = 0;
 static uint32_t seen_rreq[256];
 static uint32_t last_cleanup_time = 0;
 
+static uint8_t dh_ephemeral_priv[32];
+static uint8_t dh_ephemeral_pub[32];
+static uint8_t dh_in_progress[256];
+
 #define TIMESTAMP_CLEANUP_INTERVAL 10000
 #define TIMESTAMP_MAX_AGE 60000
+
+void mesh_get_random(uint8_t *buf, uint8_t len) {
+    static uint32_t seed = 0xACE1;
+    if (seed == 0xACE1) seed += self_node_id + internal_clock;
+    for (uint8_t i = 0; i < len; i++) {
+        seed = (seed >> 1) ^ (-(seed & 1u) & 0xB0004005u);
+        buf[i] = (uint8_t)(seed ^ (internal_clock >> (i % 4)));
+    }
+}
+
+void secure_memset(void *v, int c, size_t n) {
+    volatile uint8_t *p = (volatile uint8_t *)v;
+    while (n--) *p++ = c;
+}
+
+void mesh_init_dh(uint8_t peer_id) {
+    if (peer_id >= MAX_NODES || peer_id == self_node_id) return;
+    
+    debug_puts("[CRYPTO] Initiating Authenticated DH with node ");
+    debug_puti(peer_id);
+    debug_puts("\n");
+
+    mesh_get_random(dh_ephemeral_priv, 32);
+    x25519_base(dh_ephemeral_pub, dh_ephemeral_priv);
+    dh_in_progress[peer_id] = 1;
+
+    mesh_packet_t pkt;
+    memset(&pkt, 0, sizeof(pkt));
+    pkt.src_id = self_node_id;
+    pkt.dst_id = peer_id;
+    pkt.type = PACKET_TYPE_DH_REQ;
+    pkt.ttl = MESH_DEFAULT_TTL;
+    pkt.timestamp = internal_clock;
+    
+    // Payload: [X25519_PUB(32)] [ED25519_SIG(64)]
+    pkt.payload_len = 32 + 64;
+    memcpy(pkt.payload, dh_ephemeral_pub, 32);
+    edsign_sign(pkt.payload + 32, self_identity_pub, self_identity_priv, dh_ephemeral_pub, 32);
+
+    pkt.link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)&pkt, &session_crypto);
+
+    void lora_send_packet(mesh_packet_t *p);
+    lora_send_packet(&pkt);
+}
+
+void mesh_process_dh_req(mesh_packet_t *pkt) {
+    debug_puts("[CRYPTO] Received DH_REQ from node ");
+    debug_puti(pkt->src_id);
+    debug_puts("\n");
+
+    uint8_t peer_pub[32];
+    uint8_t peer_sig[64];
+    memcpy(peer_pub, pkt->payload, 32);
+    memcpy(peer_sig, pkt->payload + 32, 64);
+
+    if (node_identity_set[pkt->src_id]) {
+        if (!edsign_verify(peer_sig, node_identity_pubs[pkt->src_id], peer_pub, 32)) {
+            debug_puts("[SECURITY] DH_REQ signature verification FAILED! MITM suspected.\n");
+            return;
+        }
+        debug_puts("[SECURITY] DH_REQ signature verified\n");
+    } else {
+        debug_puts("[SECURITY] WARNING: Identity for node ");
+        debug_puti(pkt->src_id);
+        debug_puts(" not set. Proceeding without authentication.\n");
+    }
+
+    uint8_t my_priv[32];
+    uint8_t my_pub[32];
+    mesh_get_random(my_priv, 32);
+    x25519_base(my_pub, my_priv);
+
+    uint8_t shared_secret[32];
+    x25519(shared_secret, my_priv, peer_pub);
+
+    mesh_set_pairwise_key(pkt->src_id, shared_secret);
+    secure_memset(shared_secret, 0, 32);
+    secure_memset(my_priv, 0, 32);
+
+    // Respond with DH_REP [PUB(32)] [SIG(64)]
+    mesh_packet_t rep;
+    memset(&rep, 0, sizeof(rep));
+    rep.src_id = self_node_id;
+    rep.dst_id = pkt->src_id;
+    rep.type = PACKET_TYPE_DH_REP;
+    rep.ttl = MESH_DEFAULT_TTL;
+    rep.timestamp = internal_clock;
+    rep.payload_len = 32 + 64;
+    memcpy(rep.payload, my_pub, 32);
+    edsign_sign(rep.payload + 32, self_identity_pub, self_identity_priv, my_pub, 32);
+
+    rep.link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)&rep, &session_crypto);
+
+    void lora_send_packet(mesh_packet_t *p);
+    lora_send_packet(&rep);
+}
+
+void mesh_process_dh_rep(mesh_packet_t *pkt) {
+    if (!dh_in_progress[pkt->src_id]) {
+        debug_puts("[CRYPTO] Unsolicited DH_REP from node ");
+        debug_puti(pkt->src_id);
+        debug_puts(", ignoring\n");
+        return;
+    }
+
+    debug_puts("[CRYPTO] Received DH_REP from node ");
+    debug_puti(pkt->src_id);
+    debug_puts("\n");
+
+    uint8_t peer_pub[32];
+    uint8_t peer_sig[64];
+    memcpy(peer_pub, pkt->payload, 32);
+    memcpy(peer_sig, pkt->payload + 32, 64);
+
+    if (node_identity_set[pkt->src_id]) {
+        if (!edsign_verify(peer_sig, node_identity_pubs[pkt->src_id], peer_pub, 32)) {
+            debug_puts("[SECURITY] DH_REP signature verification FAILED! MITM suspected.\n");
+            return;
+        }
+        debug_puts("[SECURITY] DH_REP signature verified\n");
+    }
+
+    uint8_t shared_secret[32];
+    x25519(shared_secret, dh_ephemeral_priv, peer_pub);
+
+    mesh_set_pairwise_key(pkt->src_id, shared_secret);
+    secure_memset(shared_secret, 0, 32);
+    secure_memset(dh_ephemeral_priv, 0, 32);
+    dh_in_progress[pkt->src_id] = 0;
+}
+
+void mesh_set_identity_key(const uint8_t *priv) {
+    memcpy(self_identity_priv, priv, 32);
+    edsign_sec_to_pub(self_identity_pub, self_identity_priv);
+    debug_puts("[CRYPTO] Identity key set\n");
+}
+
+void mesh_set_node_identity(uint8_t id, const uint8_t *pub) {
+    if (id >= MAX_NODES) return;
+    memcpy(node_identity_pubs[id], pub, 32);
+    node_identity_set[id] = 1;
+    debug_puts("[CRYPTO] Identity public key stored for node ");
+    debug_puti(id);
+    debug_puts("\n");
+}
 
 void mesh_init(uint8_t node_id) {
     self_node_id = node_id;
     kuznyechik_init(&session_crypto, master_key);
     memset(last_timestamps, 0, sizeof(last_timestamps));
     memset(pairwise_keys_set, 0, sizeof(pairwise_keys_set));
+    memset(pairwise_packet_counts, 0, sizeof(pairwise_packet_counts));
+    memset(dh_in_progress, 0, sizeof(dh_in_progress));
+    memset(node_identity_set, 0, sizeof(node_identity_set));
+
+    // Generate a default identity based on node_id for testing
+    uint8_t dummy_priv[32];
+    memset(dummy_priv, node_id, 32);
+    mesh_set_identity_key(dummy_priv);
+
     memset(routing_table, 0, sizeof(routing_table));
     memset(seen_rreq, 0, sizeof(seen_rreq));
     is_time_master = (node_id == 1);
@@ -44,6 +210,7 @@ void mesh_set_pairwise_key(uint8_t peer_id, const uint8_t *key) {
     if (peer_id >= MAX_NODES) return;
     kuznyechik_init(&pairwise_keys[peer_id], key);
     pairwise_keys_set[peer_id] = 1;
+    pairwise_packet_counts[peer_id] = 0;
     debug_puts("[CRYPTO] Pairwise key set for node ");
     debug_puti(peer_id);
     debug_puts("\n");
@@ -115,6 +282,26 @@ void mesh_process_packet(mesh_packet_t *pkt) {
         return;
     }
 
+    if (pkt->type == PACKET_TYPE_DH_REQ) {
+        uint32_t expected_link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)pkt, &session_crypto);
+        if (pkt->link_mic != expected_link_mic) {
+            debug_puts("[SECURITY] Link MIC verification FAILED for DH_REQ! Packet dropped.\n");
+            return;
+        }
+        mesh_process_dh_req(pkt);
+        return;
+    }
+
+    if (pkt->type == PACKET_TYPE_DH_REP) {
+        uint32_t expected_link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)pkt, &session_crypto);
+        if (pkt->link_mic != expected_link_mic) {
+            debug_puts("[SECURITY] Link MIC verification FAILED for DH_REP! Packet dropped.\n");
+            return;
+        }
+        mesh_process_dh_rep(pkt);
+        return;
+    }
+
     if (pkt->type == PACKET_TYPE_RREQ) {
         uint32_t expected_link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)pkt, &session_crypto);
         if (pkt->link_mic != expected_link_mic) {
@@ -159,6 +346,7 @@ void mesh_process_packet(mesh_packet_t *pkt) {
                 return;
             }
             mesh_crypto_ctr(&pairwise_keys[pkt->src_id], pkt->timestamp, pkt->payload, pkt->payload_len);
+            pairwise_packet_counts[pkt->src_id]++;
         } else if (!pkt->e2e_encrypted) {
             mesh_crypto_ctr(&session_crypto, pkt->timestamp, pkt->payload, pkt->payload_len);
         }
@@ -212,7 +400,18 @@ void mesh_send_data(uint8_t dst_id, const uint8_t *data, uint8_t len) {
         pkt.e2e_encrypted = 1;
         pkt.e2e_mic = mesh_crypto_compute_e2e_mic((mesh_crypto_packet_t*)&pkt, &pairwise_keys[dst_id]);
         mesh_crypto_ctr(&pairwise_keys[dst_id], pkt.timestamp, pkt.payload, pkt.payload_len);
+        
+        pairwise_packet_counts[dst_id]++;
+        if (pairwise_packet_counts[dst_id] >= 1000) {
+            debug_puts("[CRYPTO] Packet limit reached, rotating key for node ");
+            debug_puti(dst_id);
+            debug_puts("\n");
+            mesh_init_dh(dst_id);
+        }
     } else {
+        if (!dh_in_progress[dst_id] && dst_id != 255) {
+            mesh_init_dh(dst_id);
+        }
         pkt.e2e_encrypted = 0;
         pkt.e2e_mic = 0;
         mesh_crypto_ctr(&session_crypto, pkt.timestamp, pkt.payload, pkt.payload_len);

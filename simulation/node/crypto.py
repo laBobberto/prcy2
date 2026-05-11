@@ -38,6 +38,41 @@ def galois_mul(a, b):
         b >>= 1
     return p
 
+from cryptography.hazmat.primitives.asymmetric import x25519, ed25519
+from cryptography.hazmat.primitives import serialization
+
+class X25519Auth:
+    @staticmethod
+    def generate_key_pair():
+        priv = x25519.X25519PrivateKey.generate()
+        pub = priv.public_key()
+        return priv, pub
+
+    @staticmethod
+    def get_shared_secret(priv, peer_pub_bytes):
+        peer_pub = x25519.X25519PublicKey.from_public_bytes(peer_pub_bytes)
+        return priv.exchange(peer_pub)
+
+class Ed25519Auth:
+    @staticmethod
+    def generate_key_pair():
+        priv = ed25519.Ed25519PrivateKey.generate()
+        pub = priv.public_key()
+        return priv, pub
+
+    @staticmethod
+    def sign(priv, message):
+        return priv.sign(message)
+
+    @staticmethod
+    def verify(pub_bytes, message, signature):
+        pub = ed25519.Ed25519PublicKey.from_public_bytes(pub_bytes)
+        try:
+            pub.verify(signature, message)
+            return True
+        except:
+            return False
+
 class Kuznyechik:
     def __init__(self, key):
         self.key = key if len(key) == 32 else key.ljust(32, b'\0')
