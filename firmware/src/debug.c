@@ -1,21 +1,39 @@
 
 #include "debug.h"
+#include "stm32f1xx_hal.h"
+#include <stdio.h>
 
-#define RCC_APB1ENR  (*(volatile uint32_t *)0x40023840)
-#define USART2_SR    (*(volatile uint32_t *)0x40004400)
-#define USART2_DR    (*(volatile uint32_t *)0x40004404)
-#define USART2_BRR   (*(volatile uint32_t *)0x40004408)
-#define USART2_CR1   (*(volatile uint32_t *)0x4000440C)
+UART_HandleTypeDef huart1;
 
 void debug_init(void) {
-    RCC_APB1ENR |= (1 << 17);
-    USART2_BRR = 0x1112; 
-    USART2_CR1 = (1 << 13) | (1 << 3) | (1 << 2);
+    __HAL_RCC_USART1_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    // PA9 -> TX, PA10 -> RX
+    GPIO_InitStruct.Pin = GPIO_PIN_9;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = GPIO_PIN_10;
+    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    huart1.Instance = USART1;
+    huart1.Init.BaudRate = 115200;
+    huart1.Init.WordLength = UART_WORDLENGTH_8B;
+    huart1.Init.StopBits = UART_STOPBITS_1;
+    huart1.Init.Parity = UART_PARITY_NONE;
+    huart1.Init.Mode = UART_MODE_TX_RX;
+    huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+    huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+    HAL_UART_Init(&huart1);
 }
 
 void debug_putc(char c) {
-    while (!(USART2_SR & (1 << 7)));
-    USART2_DR = c;
+    HAL_UART_Transmit(&huart1, (uint8_t *)&c, 1, 10);
 }
 
 void debug_puts(const char *s) {
@@ -23,9 +41,7 @@ void debug_puts(const char *s) {
 }
 
 void debug_puti(uint32_t n) {
-    if (n == 0) { debug_putc('0'); return; }
-    char buf[10];
-    int i = 0;
-    while (n > 0) { buf[i++] = (n % 10) + '0'; n /= 10; }
-    while (i > 0) debug_putc(buf[--i]);
+    char buf[12];
+    sprintf(buf, "%lu", (unsigned long)n);
+    debug_puts(buf);
 }

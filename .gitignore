@@ -18,6 +18,7 @@ tests_x86/test_crypto
 .claude/
 
 # Project specific
+.pio/
 test_renode.out
 node1.log
 node2.log
