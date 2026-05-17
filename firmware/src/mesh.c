@@ -277,9 +277,12 @@ void mesh_init(uint8_t node_id) {
 
     // Generate identity key from MCU UID (deterministic but unique per chip)
     uint8_t identity_priv[32];
-    uint32_t uid0 = *(volatile uint32_t*)0x1FFFF7E8;
-    uint32_t uid1 = *(volatile uint32_t*)0x1FFFF7EC;
-    uint32_t uid2 = *(volatile uint32_t*)0x1FFFF7F0;
+#ifndef MCU_UID_BASE
+#define MCU_UID_BASE 0x1FFFF7E8
+#endif
+    uint32_t uid0 = *(volatile uint32_t*)(MCU_UID_BASE + 0);
+    uint32_t uid1 = *(volatile uint32_t*)(MCU_UID_BASE + 4);
+    uint32_t uid2 = *(volatile uint32_t*)(MCU_UID_BASE + 8);
     // Mix UID with node_id and master_key for deterministic derivation
     for (int i = 0; i < 32; i++) {
         identity_priv[i] = master_key[i] ^ (uint8_t)(uid0 >> (i % 4 * 8))
@@ -646,26 +649,29 @@ int mesh_process_packet(mesh_packet_t *pkt) {
 
     if (pkt->src_id == self_node_id) return 0;
 
-    if (pkt->timestamp <= last_timestamps[pkt->src_id]) {
-        // Check if this is a replay or just out-of-order
-        uint32_t age = internal_clock - pkt->timestamp;
-        if (age > 60000) {
-            debug_puts("[SECURITY] Packet too old (age=");
-            debug_puti(age);
-            debug_puts("ms), dropping\n");
-            mesh_stats.rx_dropped_old++;
-            return 0;
-        }
-        // Small window — likely replay attack
-        if (age < 1000 && pkt->timestamp == last_timestamps[pkt->src_id]) {
-            debug_puts("[SECURITY] Possible replay attack from node ");
-            debug_puti(pkt->src_id);
-            debug_puts(" (same timestamp)\n");
-            mesh_stats.rx_dropped_old++;
-            return 0;
+    // Replay protection — skip for first packet from this node
+    if (last_timestamps[pkt->src_id] != 0) {
+        if (pkt->timestamp <= last_timestamps[pkt->src_id]) {
+            uint32_t age = internal_clock - pkt->timestamp;
+            if (age > 60000) {
+                debug_puts("[SECURITY] Packet too old (age=");
+                debug_puti(age);
+                debug_puts("ms), dropping\n");
+                mesh_stats.rx_dropped_old++;
+                return 0;
+            }
+            if (age < 1000 && pkt->timestamp == last_timestamps[pkt->src_id]) {
+                debug_puts("[SECURITY] Possible replay attack from node ");
+                debug_puti(pkt->src_id);
+                debug_puts(" (same timestamp)\n");
+                mesh_stats.rx_dropped_old++;
+                return 0;
+            }
         }
     }
     if (pkt->timestamp > last_timestamps[pkt->src_id]) {
+        last_timestamps[pkt->src_id] = pkt->timestamp;
+    } else if (last_timestamps[pkt->src_id] == 0) {
         last_timestamps[pkt->src_id] = pkt->timestamp;
     }
 
@@ -721,14 +727,14 @@ int mesh_process_packet(mesh_packet_t *pkt) {
             debug_puts("\n");
 
             // Auto-reply to PING with PONG
-            if (pkt->payload_len == 4 && memcmp(pkt->payload, "PING", 4) == 0) {
+            if (pkt->payload_len >= 4 && memcmp(pkt->payload, "PING", 4) == 0) {
                 debug_puts("[MESH] PING received from ");
                 debug_puti(pkt->src_id);
                 debug_puts(", sending PONG\n");
                 mesh_send_data(pkt->src_id, (uint8_t*)"PONG", 4);
             }
             // Auto-print PONG replies
-            if (pkt->payload_len == 4 && memcmp(pkt->payload, "PONG", 4) == 0) {
+            if (pkt->payload_len >= 4 && memcmp(pkt->payload, "PONG", 4) == 0) {
                 debug_puts("[MESH] PONG received from node ");
                 debug_puti(pkt->src_id);
                 debug_puts(" (RSSI=");
