@@ -199,6 +199,17 @@ int main(void) {
                         debug_puts("  Version:   "); debug_puts(MESH_FW_VERSION); debug_puts("\n");
                         debug_puts("  Node ID:   "); debug_puti(node_id); debug_puts("\n");
                         debug_puts("  Build:     "); debug_puts(__DATE__); debug_puts(" "); debug_puts(__TIME__); debug_puts("\n");
+                        // Reset source
+                        uint32_t csr = RCC->CSR;
+                        debug_puts("  Reset:     ");
+                        if (csr & RCC_CSR_LPWRRSTF) debug_puts("LPWR ");
+                        if (csr & RCC_CSR_WWDGRSTF) debug_puts("WWDG ");
+                        if (csr & RCC_CSR_IWDGRSTF) debug_puts("IWDG ");
+                        if (csr & RCC_CSR_SFTRSTF) debug_puts("SFT ");
+                        if (csr & RCC_CSR_PORRSTF) debug_puts("POR ");
+                        if (csr & RCC_CSR_PINRSTF) debug_puts("PIN ");
+                        debug_puts("\n");
+                        RCC->CSR |= RCC_CSR_RMVF;  // clear reset flags
                         debug_puts("====================\n\n");
                     } else if (cmd_buf[0] == 'h') {
                         debug_puts("\n=== COMMANDS ===\n");
