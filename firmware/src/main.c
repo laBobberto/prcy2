@@ -151,10 +151,16 @@ int main(void) {
         }
 
         if (has_char) {
+            // Filter non-printable characters (noise from UART)
+            if (c != '\n' && c != '\r' && (c < 0x20 || c > 0x7E)) {
+                // Reset buffer on garbage
+                cmd_idx = 0;
+                continue;
+            }
             if (c == '\n' || c == '\r') {
                 if (cmd_idx > 0) {
                     cmd_buf[cmd_idx] = '\0';
-                    debug_puts("[CMD] Processing: ");
+                    debug_puts("[CMD] ");
                     debug_puts(cmd_buf);
                     debug_puts("\n");
 

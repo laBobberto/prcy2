@@ -403,7 +403,7 @@ void mesh_print_routes(void) {
             debug_puts(" hops=");
             debug_puti(routing_table[i].hop_count);
             debug_puts(" RSSI=");
-            debug_puti(routing_table[i].last_rssi);
+            debug_puti_signed(routing_table[i].last_rssi);
             debug_puts("\n");
         }
     }
@@ -477,7 +477,7 @@ void mesh_print_stats(void) {
     debug_puts("  Uptime:          "); debug_puti(internal_clock); debug_puts(" ticks\n");
     debug_puts("  Time syncs:      "); debug_puti(time_sync_count); debug_puts("\n");
     if (time_sync_count > 0) {
-        debug_puts("  Avg sync offset: "); debug_puti(time_sync_total_offset / time_sync_count); debug_puts("ms\n");
+        debug_puts("  Avg sync offset: "); debug_puti_signed(time_sync_total_offset / time_sync_count); debug_puts("ms\n");
     }
     debug_puts("  Time master:     "); debug_puts(is_time_master ? "YES" : "NO"); debug_puts("\n");
     extern uint16_t lora_read_battery(void);
@@ -534,7 +534,7 @@ int mesh_process_packet(mesh_packet_t *pkt) {
             // Reject outliers (likely corrupted or delayed packets)
             if (time_diff > TIME_SYNC_OUTLIER_THRESHOLD || time_diff < -TIME_SYNC_OUTLIER_THRESHOLD) {
                 debug_puts("[TIME] Outlier rejected: diff=");
-                debug_puti(time_diff);
+                debug_puti_signed(time_diff);
                 debug_puts("ms\n");
             } else if (time_diff > 100 || time_diff < -100) {
                 // Large drift: hard sync
@@ -553,7 +553,7 @@ int mesh_process_packet(mesh_packet_t *pkt) {
                 time_sync_count++;
                 time_sync_total_offset += (adjustment > 0 ? adjustment : -adjustment);
                 debug_puts("[TIME] Soft sync: adj=");
-                debug_puti(adjustment);
+                debug_puti_signed(adjustment);
                 debug_puts("ms\n");
             }
         }
@@ -577,7 +577,7 @@ int mesh_process_packet(mesh_packet_t *pkt) {
             debug_puts(" batt=");
             debug_puti(hb.battery_mv);
             debug_puts("mV RSSI=");
-            debug_puti(hb.rssi);
+            debug_puti_signed(hb.rssi);
             debug_puts(" routes=");
             debug_puti(hb.route_count);
             debug_puts("\n");
@@ -695,10 +695,28 @@ int mesh_process_packet(mesh_packet_t *pkt) {
         if (pkt->type == PACKET_TYPE_DATA) {
             debug_puts("[MESH] Received data from node ");
             debug_puti(pkt->src_id);
-            debug_puts(": ");
-            for(int i=0; i<pkt->payload_len; i++) {
+            debug_puts(" (len=");
+            debug_puti(pkt->payload_len);
+            debug_puts("): ");
+            // Print payload, stop at first null or end of data
+            int printed = 0;
+            for(int i=0; i<pkt->payload_len && i<64; i++) {
                 if (pkt->payload[i] == 0) break;
                 debug_putc(pkt->payload[i]);
+                printed++;
+            }
+            if (printed == 0) {
+                debug_puts("(empty)");
+                // Debug: show first 8 bytes as hex
+                debug_puts(" hex=[");
+                for(int i=0; i<8 && i<pkt->payload_len; i++) {
+                    char h[3];
+                    h[0] = "0123456789ABCDEF"[(pkt->payload[i]>>4)&0xF];
+                    h[1] = "0123456789ABCDEF"[pkt->payload[i]&0xF];
+                    h[2] = 0;
+                    debug_puts(h);
+                }
+                debug_puts("]");
             }
             debug_puts("\n");
 
@@ -869,7 +887,7 @@ void mesh_add_route(uint8_t dest_id, uint8_t next_hop, uint8_t hop_count, uint32
             debug_puts(" via ");
             debug_puti(next_hop);
             debug_puts(" RSSI=");
-            debug_puti(mesh_stats.last_rssi);
+            debug_puti_signed(mesh_stats.last_rssi);
             debug_puts("\n");
         }
         return;
