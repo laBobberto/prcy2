@@ -45,52 +45,108 @@ pio run -e node2 -t upload
 ┌──────────────────────────────────────────────┐
 │           Application Layer                   │
 │  ├─ User messages (serial/USB commands)       │
+│  ├─ PING/PONG connectivity test               │
+│  ├─ Heartbeat broadcast (30s interval)        │
 │  └─ Loopback echo (Node 2)                   │
 │                                               │
 │           Security Layer                      │
 │  ├─ E2E Encryption (Kuznyechik CTR)           │
 │  ├─ Link Encryption (Kuznyechik CTR)          │
 │  ├─ 32-bit MIC (E2E + Link)                   │
-│  └─ X25519 key exchange + EdDSA signatures    │
+│  ├─ X25519 key exchange + EdDSA signatures    │
+│  ├─ DH handshake with timeout & retry         │
+│  └─ Replay protection (timestamp filtering)   │
 │                                               │
 │           Routing Layer (AODV)                │
 │  ├─ Route Discovery (RREQ/RREP)               │
-│  └─ Route Table (16 entries)                  │
+│  ├─ Route Error (RERR) propagation            │
+│  ├─ Route Table (16 entries with RSSI)        │
+│  └─ Link quality monitoring                   │
 │                                               │
 │           Transport Layer                     │
 │  ├─ SX1278 SPI driver                         │
-│  └─ LoRa modulation (configurable BW/SF)      │
+│  ├─ LoRa modulation (SF7/BW125kHz/CR4/5)     │
+│  ├─ Listen Before Talk (CAD)                  │
+│  └─ RSSI/SNR reporting                        │
+│                                               │
+│           Power Management                    │
+│  ├─ LoRa sleep mode                           │
+│  └─ Battery voltage monitoring (ADC)          │
 └──────────────────────────────────────────────┘
 ```
 
-## Usage
+## CLI Commands
 
-Connect to Node 1 via serial (115200 baud):
+Connect via serial (115200 baud) or USB CDC:
 
 ```
-s 2 hello       → send "hello" to Node 2
-s 2 test msg    → send "test msg" to Node 2
+s <dst> <msg>  Send message to node
+p <dst>        Ping node (auto-reply with PONG)
+d <peer>       Initiate DH key exchange
+r              Show routing table
+i              Show statistics (TX/RX/RSSI/routes)
+b              Show battery voltage
+m              Show memory usage
+f              Show Flash config status
+v              Show firmware version & reset source
+h              Show help
 ```
 
-Node 2 (flashed with `-DWORK_AS_LOOPBACK_FOR_NODE_2`) echoes data back to the sender.
+### Example Session
+
+```
+> s 2 hello world
+[CMD] Sending to node 2: hello world
+
+> p 2
+[CMD] Pinging node 2
+[MESH] PONG received from node 2 (RSSI=-45 dBm)
+
+> i
+=== PRCY MESH v1.0.0 ===
+  TX packets:      15
+  RX packets:      12
+  Last RSSI:       -45 dBm
+  Routes active:   1/16
+    -> node 2 via 2 hops=1 RSSI=-45
+=======================
+```
 
 ## Project Structure
 
 ```
 firmware/
 ├── inc/             # Headers
-│   ├── mesh.h       # Packet types, routing structs
+│   ├── mesh.h       # Packet types, routing, protocol defs
 │   ├── lora.h       # LoRa driver interface
 │   ├── debug.h      # UART/USB debug output
+│   ├── config.h     # Flash configuration storage
 │   └── ...
 ├── src/             # Sources
-│   ├── main.c       # Entry point, main loop, commands
-│   ├── mesh.c       # Mesh protocol (AODV, crypto, routing)
-│   ├── lora.c       # SX1278 SPI driver
-│   └── debug.c      # Debug output (UART + USB CDC)
+│   ├── main.c       # Entry point, main loop, CLI
+│   ├── mesh.c       # Mesh protocol (AODV, crypto, stats)
+│   ├── lora.c       # SX1278 SPI driver + LBT
+│   ├── debug.c      # Debug output (UART + USB CDC)
+│   └── config.c     # Flash config read/write/verify
 ├── lib/
 │   ├── kuznyechik/  # GOST R 34.12-2015 cipher
 │   └── crypto/      # X25519, EdDSA, SHA-512, CMAC
 ├── stm32f103.ld     # Linker script (64K Flash, 20K RAM)
 └── Makefile         # Standalone build (optional)
 ```
+
+## Resource Usage
+
+| Resource | Node 1 | Node 2 |
+|----------|--------|--------|
+| RAM      | 46.7%  | 46.7%  |
+| Flash    | 60.3%  | ~60%   |
+
+## Security Notes
+
+- **Identity keys**: Generated from MCU UID + master key (unique per chip)
+- **Key exchange**: X25519 DH with EdDSA authentication
+- **Encryption**: GOST Kuznyechik in CTR mode (link + E2E)
+- **Integrity**: 32-bit CMAC MIC (link + E2E)
+- **Replay protection**: Timestamp-based with outlier rejection
+- **Master key**: Currently hardcoded (for development only)
