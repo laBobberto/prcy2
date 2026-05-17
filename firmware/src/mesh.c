@@ -333,6 +333,21 @@ void mesh_print_stats(void) {
     debug_puts("/");
     debug_puti(MAX_ROUTES);
     debug_puts("\n");
+    for (int i = 0; i < MAX_ROUTES; i++) {
+        if (routing_table[i].valid) {
+            debug_puts("    -> node ");
+            debug_puti(routing_table[i].dest_id);
+            debug_puts(" via ");
+            debug_puti(routing_table[i].next_hop);
+            debug_puts(" hops=");
+            debug_puti(routing_table[i].hop_count);
+            debug_puts(" RSSI=");
+            debug_puti(routing_table[i].last_rssi);
+            debug_puts(" SNR=");
+            debug_puti(routing_table[i].last_snr);
+            debug_puts("\n");
+        }
+    }
     debug_puts("=======================\n\n");
 }
 
@@ -614,10 +629,14 @@ void mesh_add_route(uint8_t dest_id, uint8_t next_hop, uint8_t hop_count, uint32
             existing->hop_count = hop_count;
             existing->seq_num = seq_num;
             existing->lifetime = internal_clock + ROUTE_LIFETIME;
+            existing->last_rssi = mesh_stats.last_rssi;
+            existing->last_snr = mesh_stats.last_snr;
             debug_puts("[AODV] Updated route to ");
             debug_puti(dest_id);
             debug_puts(" via ");
             debug_puti(next_hop);
+            debug_puts(" RSSI=");
+            debug_puti(mesh_stats.last_rssi);
             debug_puts("\n");
         }
         return;
@@ -631,6 +650,8 @@ void mesh_add_route(uint8_t dest_id, uint8_t next_hop, uint8_t hop_count, uint32
             routing_table[i].seq_num = seq_num;
             routing_table[i].lifetime = internal_clock + ROUTE_LIFETIME;
             routing_table[i].valid = 1;
+            routing_table[i].last_rssi = mesh_stats.last_rssi;
+            routing_table[i].last_snr = mesh_stats.last_snr;
             debug_puts("[AODV] Added route to ");
             debug_puti(dest_id);
             debug_puts(" via ");
@@ -647,6 +668,8 @@ void mesh_update_route_lifetime(uint8_t dest_id) {
     route_entry_t *route = mesh_find_route(dest_id);
     if (route) {
         route->lifetime = internal_clock + ROUTE_LIFETIME;
+        route->last_rssi = mesh_stats.last_rssi;
+        route->last_snr = mesh_stats.last_snr;
     }
 }
 

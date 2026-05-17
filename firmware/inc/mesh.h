@@ -36,6 +36,8 @@ typedef struct {
     uint32_t seq_num;
     uint32_t lifetime;
     uint8_t  valid;
+    int8_t   last_rssi;   // RSSI of last packet from this next_hop
+    int8_t   last_snr;    // SNR of last packet from this next_hop
 } route_entry_t;
 #pragma pack(pop)
 
