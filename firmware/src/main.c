@@ -60,7 +60,6 @@ static void handle_loopback(mesh_packet_t *rx_pkt) {
 #include "usbd_cdc.h"
 #include "usbd_cdc_if.h"
 USBD_HandleTypeDef hUsbDeviceFS;
-extern int VCP_read(uint8_t* buf, uint16_t len);
 #endif
 
 void led_init(void) {
