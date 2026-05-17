@@ -192,8 +192,46 @@ void lora_init(void) {
 
 extern void led_blink(int times);
 
+// Listen Before Talk: check if channel is clear using CAD
+static int lora_channel_clear(void) {
+    // Switch to CAD mode
+    lora_write_reg(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_CAD);
+
+    // Wait for CAD done
+    uint32_t timeout = 1000;
+    while (timeout-- > 0) {
+        uint8_t irq = lora_read_reg(REG_IRQ_FLAGS);
+        if (irq & IRQ_CAD_DONE) {
+            lora_write_reg(REG_IRQ_FLAGS, IRQ_CAD_DONE | IRQ_CAD_DETECTED);
+            // If CAD detected a signal, channel is busy
+            if (irq & IRQ_CAD_DETECTED) {
+                return 0;  // channel busy
+            }
+            return 1;  // channel clear
+        }
+    }
+    // Timeout — assume clear
+    lora_write_reg(REG_IRQ_FLAGS, IRQ_CAD_DONE | IRQ_CAD_DETECTED);
+    return 1;
+}
+
+#define LBT_MAX_RETRIES 5
+#define LBT_BACKOFF_BASE_MS 10
+
 void lora_send_packet(mesh_packet_t *pkt) {
     led_blink(1);
+
+    // Listen Before Talk: wait for clear channel
+    for (int retry = 0; retry < LBT_MAX_RETRIES; retry++) {
+        if (lora_channel_clear()) break;
+        // Random backoff based on packet src_id + retry
+        uint16_t backoff = LBT_BACKOFF_BASE_MS * (retry + 1) + (pkt->src_id * 7) % 20;
+        for (volatile uint16_t i = 0; i < backoff * 100; i++);  // crude delay
+        if (retry == LBT_MAX_RETRIES - 1) {
+            debug_puts("[LORA] LBT: channel busy, sending anyway\n");
+        }
+    }
+
     lora_write_reg(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_STDBY);
     lora_write_reg(REG_FIFO_ADDR_PTR, 0);
 
