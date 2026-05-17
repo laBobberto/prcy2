@@ -679,10 +679,22 @@ void mesh_send_data(uint8_t dst_id, const uint8_t *data, uint8_t len) {
 
     route_entry_t *route = mesh_find_route(dst_id);
     if (route && route->valid) {
-    
+        // Check if route is stale (not heard from next_hop in a while)
+        if (route->last_rssi == 0 && internal_clock > ROUTE_LIFETIME) {
+            // Route was never heard from directly — might be stale
+            debug_puts("[ROUTE] Warning: route to ");
+            debug_puti(dst_id);
+            debug_puts(" via ");
+            debug_puti(route->next_hop);
+            debug_puts(" has no RSSI data\n");
+        }
         lora_send_packet(&pkt);
     } else {
+        debug_puts("[ROUTE] No route to ");
+        debug_puti(dst_id);
+        debug_puts(", sending RREQ\n");
         mesh_send_rreq(dst_id);
+        // Queue packet for later sending (simplified: just send RREQ)
     }
 }
 
