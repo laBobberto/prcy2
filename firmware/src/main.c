@@ -160,14 +160,18 @@ int main(void) {
             if (c == '\n' || c == '\r') {
                 if (cmd_idx > 0) {
                     cmd_buf[cmd_idx] = '\0';
+                    // Strip leading whitespace (USB CDC artifact)
+                    char *cmd = cmd_buf;
+                    while (*cmd == ' ' || *cmd == '\t') cmd++;
+                    if (*cmd == '\0') { cmd_idx = 0; continue; }
                     debug_puts("[CMD] ");
-                    debug_puts(cmd_buf);
+                    debug_puts(cmd);
                     debug_puts("\n");
 
-                    if (cmd_buf[0] == 's' && cmd_buf[1] == ' ') {
+                    if (cmd[0] == 's' && cmd[1] == ' ') {
                         // s <dst> <msg>
-                        int dst_val = atoi(&cmd_buf[2]);
-                        char *second_space = strchr(&cmd_buf[2], ' ');
+                        int dst_val = atoi(&cmd[2]);
+                        char *second_space = strchr(&cmd[2], ' ');
                         if (second_space) {
                             char *msg_ptr = second_space + 1;
                             debug_puts("[CMD] Sending to node ");
@@ -177,30 +181,30 @@ int main(void) {
                             debug_puts("\n");
                             mesh_send_data((uint8_t)dst_val, (uint8_t*)msg_ptr, strlen(msg_ptr));
                         }
-                    } else if (cmd_buf[0] == 'p' && cmd_buf[1] == ' ') {
+                    } else if (cmd[0] == 'p' && cmd[1] == ' ') {
                         // p <node> — ping
-                        int dst_val = atoi(&cmd_buf[2]);
+                        int dst_val = atoi(&cmd[2]);
                         debug_puts("[CMD] Pinging node ");
                         debug_puti(dst_val);
                         debug_puts("\n");
                         mesh_send_data((uint8_t)dst_val, (uint8_t*)"PING", 4);
-                    } else if (cmd_buf[0] == 'd' && cmd_buf[1] == ' ') {
+                    } else if (cmd[0] == 'd' && cmd[1] == ' ') {
                         // d <node> — initiate DH key exchange
-                        int peer_val = atoi(&cmd_buf[2]);
+                        int peer_val = atoi(&cmd[2]);
                         debug_puts("[CMD] Initiating DH with node ");
                         debug_puti(peer_val);
                         debug_puts("\n");
                         mesh_init_dh((uint8_t)peer_val);
-                    } else if (cmd_buf[0] == 'r') {
+                    } else if (cmd[0] == 'r') {
                         mesh_print_routes();
-                    } else if (cmd_buf[0] == 'i') {
+                    } else if (cmd[0] == 'i') {
                         mesh_print_stats();
-                    } else if (cmd_buf[0] == 'b') {
+                    } else if (cmd[0] == 'b') {
                         extern uint16_t lora_read_battery(void);
                         debug_puts("[CMD] Battery: ");
                         debug_puti(lora_read_battery());
                         debug_puts(" mV\n");
-                    } else if (cmd_buf[0] == 'm') {
+                    } else if (cmd[0] == 'm') {
                         // Memory info
                         extern char _ebss, _end;
                         uint32_t sp;
@@ -211,7 +215,7 @@ int main(void) {
                         debug_puts("  RAM end:   0x"); debug_puti((uint32_t)&_end); debug_puts("\n");
                         debug_puts("  Free RAM:  "); debug_puti((uint32_t)&_end - sp); debug_puts(" bytes\n");
                         debug_puts("=============\n\n");
-                    } else if (cmd_buf[0] == 'f') {
+                    } else if (cmd[0] == 'f') {
                         // Flash config status
                         config_t cfg;
                         if (config_load(&cfg) == 0) {
@@ -220,7 +224,7 @@ int main(void) {
                         } else {
                             debug_puts("[CMD] Flash config: EMPTY\n");
                         }
-                    } else if (cmd_buf[0] == 'v') {
+                    } else if (cmd[0] == 'v') {
                         debug_puts("\n=== FIRMWARE INFO ===\n");
                         debug_puts("  Version:   "); debug_puts(MESH_FW_VERSION); debug_puts("\n");
                         debug_puts("  Node ID:   "); debug_puti(node_id); debug_puts("\n");
@@ -237,7 +241,7 @@ int main(void) {
                         debug_puts("\n");
                         RCC->CSR |= RCC_CSR_RMVF;  // clear reset flags
                         debug_puts("====================\n\n");
-                    } else if (cmd_buf[0] == 'h') {
+                    } else if (cmd[0] == 'h') {
                         debug_puts("\n=== COMMANDS ===\n");
                         debug_puts("  s <dst> <msg>  Send message to node\n");
                         debug_puts("  p <dst>        Ping node\n");

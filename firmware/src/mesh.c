@@ -57,8 +57,10 @@ static uint32_t time_sync_counter = 0;
 static int32_t clock_offset = 0;
 static uint32_t time_sync_count = 0;
 static int32_t time_sync_total_offset = 0;
+static uint32_t consecutive_outliers = 0;
 #define TIME_SYNC_FILTER_ALPHA 4  // 1/4 weight for new samples (low-pass filter)
-#define TIME_SYNC_OUTLIER_THRESHOLD 500  // ignore offsets > 500ms (likely corrupted)
+#define TIME_SYNC_OUTLIER_THRESHOLD 30000  // 30s — allow large initial drift, reject corrupted only
+#define TIME_SYNC_MAX_CONSECUTIVE_OUTLIERS 5  // force hard sync after N rejected packets
 
 static route_entry_t routing_table[MAX_ROUTES];
 static uint32_t self_seq_num = 0;
@@ -536,12 +538,22 @@ int mesh_process_packet(mesh_packet_t *pkt) {
 
             // Reject outliers (likely corrupted or delayed packets)
             if (time_diff > TIME_SYNC_OUTLIER_THRESHOLD || time_diff < -TIME_SYNC_OUTLIER_THRESHOLD) {
+                consecutive_outliers++;
                 debug_puts("[TIME] Outlier rejected: diff=");
                 debug_puti_signed(time_diff);
                 debug_puts("ms\n");
+                // Force hard sync after too many consecutive outliers
+                if (consecutive_outliers >= TIME_SYNC_MAX_CONSECUTIVE_OUTLIERS) {
+                    internal_clock = pkt->timestamp;
+                    consecutive_outliers = 0;
+                    debug_puts("[TIME] Forced hard sync after ");
+                    debug_puti(TIME_SYNC_MAX_CONSECUTIVE_OUTLIERS);
+                    debug_puts(" outliers\n");
+                }
             } else if (time_diff > 100 || time_diff < -100) {
                 // Large drift: hard sync
                 internal_clock = pkt->timestamp;
+                consecutive_outliers = 0;
                 debug_puts("[TIME] Hard sync: adjusted by ");
                 debug_puti(time_diff > 0 ? time_diff : -time_diff);
                 debug_puts("ms\n");
@@ -553,6 +565,7 @@ int mesh_process_packet(mesh_packet_t *pkt) {
                 if (adjustment == 0) adjustment = (time_diff > 0) ? 1 : -1;
                 internal_clock += adjustment;
                 clock_offset = adjustment;
+                consecutive_outliers = 0;
                 time_sync_count++;
                 time_sync_total_offset += (adjustment > 0 ? adjustment : -adjustment);
                 debug_puts("[TIME] Soft sync: adj=");
