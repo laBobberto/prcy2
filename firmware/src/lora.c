@@ -76,6 +76,10 @@ SPI_HandleTypeDef hspi1;
 // Max packet size for LoRa
 #define LORA_MAX_PACKET_LEN      255
 
+// Power management registers
+#define REG_OCP                  0x0B
+#define REG_LNA                  0x0C
+
 void lora_write_reg(uint8_t addr, uint8_t val) {
     HAL_GPIO_WritePin(LORA_SS_PORT, LORA_SS_PIN, GPIO_PIN_RESET);
     uint8_t tx[2] = { addr | 0x80, val };
@@ -91,6 +95,13 @@ uint8_t lora_read_reg(uint8_t addr) {
     HAL_SPI_Receive(&hspi1, &rx, 1, 10);
     HAL_GPIO_WritePin(LORA_SS_PORT, LORA_SS_PIN, GPIO_PIN_SET);
     return rx;
+}
+
+// Battery voltage monitoring via SX1278 internal ADC
+uint16_t lora_read_battery(void) {
+    lora_write_reg(0x4F, 0x10);  // enable battery monitor
+    uint8_t batt = lora_read_reg(0x50);
+    return (uint16_t)(1520 + batt * 10);  // mV
 }
 
 void lora_init(void) {
@@ -187,6 +198,16 @@ void lora_init(void) {
 
     // Switch to standby, then start receiving
     lora_write_reg(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_STDBY);
+    lora_write_reg(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_RX_CONTINUOUS);
+}
+
+void lora_sleep(void) {
+    lora_write_reg(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_SLEEP);
+}
+
+void lora_wakeup(void) {
+    lora_write_reg(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_STDBY);
+    // Reconfigure for RX
     lora_write_reg(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_RX_CONTINUOUS);
 }
 
