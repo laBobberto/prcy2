@@ -53,6 +53,10 @@ static void mesh_process_rerr(mesh_packet_t *pkt);
 static uint8_t is_time_master = 0;
 static uint32_t time_sync_counter = 0;
 static int32_t clock_offset = 0;
+static uint32_t time_sync_count = 0;
+static int32_t time_sync_total_offset = 0;
+#define TIME_SYNC_FILTER_ALPHA 4  // 1/4 weight for new samples (low-pass filter)
+#define TIME_SYNC_OUTLIER_THRESHOLD 500  // ignore offsets > 500ms (likely corrupted)
 
 static route_entry_t routing_table[MAX_ROUTES];
 static uint32_t self_seq_num = 0;
@@ -404,6 +408,11 @@ void mesh_print_stats(void) {
         debug_puts("  SNR avg:         "); debug_puti(snr_avg); debug_puts(" dB\n");
     }
     debug_puts("  Uptime:          "); debug_puti(internal_clock); debug_puts(" ticks\n");
+    debug_puts("  Time syncs:      "); debug_puti(time_sync_count); debug_puts("\n");
+    if (time_sync_count > 0) {
+        debug_puts("  Avg sync offset: "); debug_puti(time_sync_total_offset / time_sync_count); debug_puts("ms\n");
+    }
+    debug_puts("  Time master:     "); debug_puts(is_time_master ? "YES" : "NO"); debug_puts("\n");
     debug_puts("  Routes active:   ");
     int routes = 0;
     for (int i = 0; i < MAX_ROUTES; i++) if (routing_table[i].valid) routes++;
@@ -453,17 +462,30 @@ int mesh_process_packet(mesh_packet_t *pkt) {
         if (pkt->src_id != self_node_id && !is_time_master) {
             int32_t time_diff = (int32_t)pkt->timestamp - (int32_t)internal_clock;
 
-            if (time_diff > 100 || time_diff < -100) {
+            // Reject outliers (likely corrupted or delayed packets)
+            if (time_diff > TIME_SYNC_OUTLIER_THRESHOLD || time_diff < -TIME_SYNC_OUTLIER_THRESHOLD) {
+                debug_puts("[TIME] Outlier rejected: diff=");
+                debug_puti(time_diff);
+                debug_puts("ms\n");
+            } else if (time_diff > 100 || time_diff < -100) {
+                // Large drift: hard sync
                 internal_clock = pkt->timestamp;
-                debug_puts("[TIME] Hard sync: clock adjusted by ");
+                debug_puts("[TIME] Hard sync: adjusted by ");
                 debug_puti(time_diff > 0 ? time_diff : -time_diff);
-                debug_puts("\n");
+                debug_puts("ms\n");
+                time_sync_count++;
+                time_sync_total_offset += (time_diff > 0 ? time_diff : -time_diff);
             } else if (time_diff != 0) {
-                clock_offset = time_diff / 4;
-                internal_clock += clock_offset;
-                debug_puts("[TIME] Soft sync: offset=");
-                debug_puti(clock_offset);
-                debug_puts("\n");
+                // Small drift: exponential moving average filter
+                int32_t adjustment = time_diff / TIME_SYNC_FILTER_ALPHA;
+                if (adjustment == 0) adjustment = (time_diff > 0) ? 1 : -1;
+                internal_clock += adjustment;
+                clock_offset = adjustment;
+                time_sync_count++;
+                time_sync_total_offset += (adjustment > 0 ? adjustment : -adjustment);
+                debug_puts("[TIME] Soft sync: adj=");
+                debug_puti(adjustment);
+                debug_puts("ms\n");
             }
         }
 
