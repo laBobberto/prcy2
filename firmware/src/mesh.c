@@ -63,6 +63,10 @@ static uint32_t last_cleanup_time = 0;
 static uint8_t dh_ephemeral_priv[32];
 static uint8_t dh_ephemeral_pub[32];
 static uint8_t dh_in_progress[MAX_NODES];
+static uint32_t dh_start_time[MAX_NODES];
+static uint8_t dh_retry_count[MAX_NODES];
+#define DH_TIMEOUT_MS 10000
+#define DH_MAX_RETRIES 3
 
 static kuznyechik_ctx_t prng_ctx;
 static uint8_t prng_counter[16];
@@ -109,14 +113,32 @@ static void secure_memset(void *v, int c, size_t n) {
 
 void mesh_init_dh(uint8_t peer_id) {
     if (peer_id >= MAX_NODES || peer_id == self_node_id) return;
-    
+    if (dh_in_progress[peer_id] && dh_retry_count[peer_id] >= DH_MAX_RETRIES) {
+        debug_puts("[CRYPTO] DH with node ");
+        debug_puti(peer_id);
+        debug_puts(" failed after max retries\n");
+        dh_in_progress[peer_id] = 0;
+        dh_retry_count[peer_id] = 0;
+        return;
+    }
+
     debug_puts("[CRYPTO] Initiating Authenticated DH with node ");
     debug_puti(peer_id);
+    if (dh_retry_count[peer_id] > 0) {
+        debug_puts(" (retry ");
+        debug_puti(dh_retry_count[peer_id]);
+        debug_puts("/");
+        debug_puti(DH_MAX_RETRIES);
+        debug_puts(")");
+    }
     debug_puts("\n");
 
     mesh_get_random(dh_ephemeral_priv, 32);
     x25519_base(dh_ephemeral_pub, dh_ephemeral_priv);
     dh_in_progress[peer_id] = 1;
+    dh_start_time[peer_id] = internal_clock;
+    if (dh_retry_count[peer_id] == 0) dh_retry_count[peer_id] = 0; // will be incremented below
+    dh_retry_count[peer_id]++;
 
     mesh_packet_t pkt;
     memset(&pkt, 0, sizeof(pkt));
@@ -297,6 +319,24 @@ void mesh_tick(void) {
         mesh_cleanup_routes();
     }
 
+    // Check for DH timeouts and retry
+    for (int i = 0; i < MAX_NODES; i++) {
+        if (dh_in_progress[i] && (internal_clock - dh_start_time[i] >= DH_TIMEOUT_MS)) {
+            debug_puts("[CRYPTO] DH timeout for node ");
+            debug_puti(i);
+            debug_puts("\n");
+            dh_in_progress[i] = 0;
+            if (dh_retry_count[i] < DH_MAX_RETRIES) {
+                mesh_init_dh(i);  // will increment retry_count
+            } else {
+                debug_puts("[CRYPTO] DH with node ");
+                debug_puti(i);
+                debug_puts(" failed permanently\n");
+                dh_retry_count[i] = 0;
+            }
+        }
+    }
+
     if (internal_clock - last_cleanup_time >= TIMESTAMP_CLEANUP_INTERVAL) {
         mesh_cleanup_old_data();
         last_cleanup_time = internal_clock;
@@ -352,6 +392,9 @@ void mesh_print_stats(void) {
     debug_puts("  RREP sent/rcv:   "); debug_puti(mesh_stats.rrep_sent); debug_puts("/"); debug_puti(mesh_stats.rrep_received); debug_puts("\n");
     debug_puts("  RERR sent/rcv:   "); debug_puti(mesh_stats.rerr_sent); debug_puts("/"); debug_puti(mesh_stats.rerr_received); debug_puts("\n");
     debug_puts("  E2E decrypted:   "); debug_puti(mesh_stats.e2e_decrypted); debug_puts("\n");
+    int dh_active = 0;
+    for (int i = 0; i < MAX_NODES; i++) if (dh_in_progress[i]) dh_active++;
+    debug_puts("  DH in progress:  "); debug_puti(dh_active); debug_puts("\n");
     debug_puts("  Last RSSI:       "); debug_puti(mesh_stats.last_rssi); debug_puts(" dBm\n");
     debug_puts("  Last SNR:        "); debug_puti(mesh_stats.last_snr); debug_puts(" dB\n");
     if (mesh_stats.rssi_count > 0) {
