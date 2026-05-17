@@ -14,6 +14,7 @@ typedef struct {
     uint8_t  reserved[2];     // padding
     uint8_t  identity_priv[32]; // Ed25519 private key
     uint8_t  identity_pub[32];  // Ed25519 public key
+    uint8_t  network_secret[32]; // Shared network secret (master key)
     uint32_t crc32;           // CRC of all above
 } config_t;
 
@@ -25,5 +26,8 @@ int config_load(config_t *cfg);
 
 // Erase config from Flash
 int config_erase(void);
+
+// Compute and set CRC32 in config struct (call before config_save)
+void config_finalize_crc(config_t *cfg);
 
 #endif

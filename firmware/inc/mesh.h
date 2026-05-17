@@ -92,6 +92,7 @@ typedef struct {
 } mesh_packet_t;
 #pragma pack(pop)
 
+void mesh_set_network_secret(const uint8_t secret[32]);
 void mesh_init(uint8_t node_id);
 int mesh_process_packet(mesh_packet_t *pkt);
 void mesh_send_data(uint8_t dst_id, const uint8_t *data, uint8_t len);

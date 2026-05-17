@@ -290,6 +290,10 @@ void mesh_set_node_identity(uint8_t id, const uint8_t *pub) {
     debug_puts("\n");
 }
 
+void mesh_set_network_secret(const uint8_t secret[32]) {
+    memcpy(master_key, secret, 32);
+}
+
 void mesh_init(uint8_t node_id) {
     self_node_id = node_id;
     kuznyechik_init(&session_crypto, master_key);
