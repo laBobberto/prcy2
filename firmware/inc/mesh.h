@@ -10,6 +10,7 @@
 #define MAX_NODES 16
 #define MAX_ROUTES 16
 #define ROUTE_LIFETIME 30000
+#define MESH_FW_VERSION "1.0.0"
 
 typedef enum {
     PACKET_TYPE_DATA = 0,

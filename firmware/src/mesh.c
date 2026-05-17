@@ -311,7 +311,9 @@ void mesh_update_rssi(int16_t rssi, int8_t snr) {
 }
 
 void mesh_print_stats(void) {
-    debug_puts("\n=== MESH STATISTICS ===\n");
+    debug_puts("\n=== PRCY MESH v");
+    debug_puts(MESH_FW_VERSION);
+    debug_puts(" ===\n");
     debug_puts("  TX packets:      "); debug_puti(mesh_stats.tx_count); debug_puts("\n");
     debug_puts("  RX packets:      "); debug_puti(mesh_stats.rx_count); debug_puts("\n");
     debug_puts("  RX routed:       "); debug_puti(mesh_stats.rx_routed); debug_puts("\n");

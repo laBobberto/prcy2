@@ -105,11 +105,13 @@ int main(void) {
 
     mesh_init(node_id);
     debug_puts("\n==========================================\n");
-    debug_puts("MESH NODE ");
+    debug_puts("PRCY Mesh Network v");
+    debug_puts(MESH_FW_VERSION);
+    debug_puts("\nNode ID: ");
     debug_puti(node_id);
-    debug_puts(" STARTED\n");
+    debug_puts("\n");
 #ifdef WORK_AS_LOOPBACK_FOR_NODE_2
-    debug_puts("MODE: LOOPBACK (ECHO)\n");
+    debug_puts("Mode: LOOPBACK (ECHO)\n");
 #else
     debug_puts("MODE: SENDER/RELAY\n");
 #endif
