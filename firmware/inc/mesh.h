@@ -93,6 +93,7 @@ uint32_t mesh_get_time(void);
 
 // Statistics
 void mesh_print_stats(void);
+void mesh_print_routes(void);
 void mesh_notify_tx(void);  // called by lora_send_packet
 void mesh_update_rssi(int16_t rssi, int8_t snr);  // called by lora_check_receive
 

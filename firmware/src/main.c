@@ -171,11 +171,30 @@ int main(void) {
                             debug_puts("\n");
                             mesh_send_data((uint8_t)dst_val, (uint8_t*)msg_ptr, strlen(msg_ptr));
                         }
+                    } else if (cmd_buf[0] == 'p' && cmd_buf[1] == ' ') {
+                        // p <node> — ping
+                        int dst_val = atoi(&cmd_buf[2]);
+                        debug_puts("[CMD] Pinging node ");
+                        debug_puti(dst_val);
+                        debug_puts("\n");
+                        mesh_send_data((uint8_t)dst_val, (uint8_t*)"PING", 4);
+                    } else if (cmd_buf[0] == 'd' && cmd_buf[1] == ' ') {
+                        // d <node> — initiate DH key exchange
+                        int peer_val = atoi(&cmd_buf[2]);
+                        debug_puts("[CMD] Initiating DH with node ");
+                        debug_puti(peer_val);
+                        debug_puts("\n");
+                        mesh_init_dh((uint8_t)peer_val);
+                    } else if (cmd_buf[0] == 'r') {
+                        mesh_print_routes();
                     } else if (cmd_buf[0] == 'i') {
                         mesh_print_stats();
                     } else if (cmd_buf[0] == 'h') {
                         debug_puts("\n=== COMMANDS ===\n");
                         debug_puts("  s <dst> <msg>  Send message to node\n");
+                        debug_puts("  p <dst>        Ping node\n");
+                        debug_puts("  d <peer>       Initiate DH key exchange\n");
+                        debug_puts("  r              Show routing table\n");
                         debug_puts("  i              Show statistics\n");
                         debug_puts("  h              Show this help\n");
                         debug_puts("================\n\n");

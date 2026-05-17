@@ -351,6 +351,26 @@ uint32_t mesh_get_time(void) {
     return internal_clock;
 }
 
+void mesh_print_routes(void) {
+    debug_puts("\n=== ROUTING TABLE ===\n");
+    for (int i = 0; i < MAX_ROUTES; i++) {
+        if (routing_table[i].valid) {
+            debug_puts("  [");
+            debug_puti(i);
+            debug_puts("] dest=");
+            debug_puti(routing_table[i].dest_id);
+            debug_puts(" via=");
+            debug_puti(routing_table[i].next_hop);
+            debug_puts(" hops=");
+            debug_puti(routing_table[i].hop_count);
+            debug_puts(" RSSI=");
+            debug_puti(routing_table[i].last_rssi);
+            debug_puts("\n");
+        }
+    }
+    debug_puts("=====================\n\n");
+}
+
 void mesh_notify_tx(void) {
     mesh_stats.tx_count++;
 }
