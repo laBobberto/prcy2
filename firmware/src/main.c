@@ -189,6 +189,17 @@ int main(void) {
                         mesh_print_routes();
                     } else if (cmd_buf[0] == 'i') {
                         mesh_print_stats();
+                    } else if (cmd_buf[0] == 'b') {
+                        extern uint16_t lora_read_battery(void);
+                        debug_puts("[CMD] Battery: ");
+                        debug_puti(lora_read_battery());
+                        debug_puts(" mV\n");
+                    } else if (cmd_buf[0] == 'v') {
+                        debug_puts("\n=== FIRMWARE INFO ===\n");
+                        debug_puts("  Version:   "); debug_puts(MESH_FW_VERSION); debug_puts("\n");
+                        debug_puts("  Node ID:   "); debug_puti(node_id); debug_puts("\n");
+                        debug_puts("  Build:     "); debug_puts(__DATE__); debug_puts(" "); debug_puts(__TIME__); debug_puts("\n");
+                        debug_puts("====================\n\n");
                     } else if (cmd_buf[0] == 'h') {
                         debug_puts("\n=== COMMANDS ===\n");
                         debug_puts("  s <dst> <msg>  Send message to node\n");
@@ -196,6 +207,8 @@ int main(void) {
                         debug_puts("  d <peer>       Initiate DH key exchange\n");
                         debug_puts("  r              Show routing table\n");
                         debug_puts("  i              Show statistics\n");
+                        debug_puts("  b              Show battery voltage\n");
+                        debug_puts("  v              Show firmware version\n");
                         debug_puts("  h              Show this help\n");
                         debug_puts("================\n\n");
                     } else {
