@@ -43,6 +43,8 @@ static struct {
     uint32_t rssi_count;
     int16_t  rssi_min;
     int16_t  rssi_max;
+    uint32_t link_warn_weak;
+    uint32_t link_warn_poor_snr;
 } mesh_stats;
 static uint32_t internal_clock = 0;
 
@@ -418,23 +420,31 @@ void mesh_update_rssi(int16_t rssi, int8_t snr) {
     mesh_stats.rssi_sum += rssi;
     mesh_stats.snr_sum += snr;
     mesh_stats.rssi_count++;
-    if (rssi < mesh_stats.rssi_min) mesh_stats.rssi_min = rssi;
-    if (rssi > mesh_stats.rssi_max) mesh_stats.rssi_max = rssi;
+    if (mesh_stats.rssi_count == 1) {
+        mesh_stats.rssi_min = rssi;
+        mesh_stats.rssi_max = rssi;
+    } else {
+        if (rssi < mesh_stats.rssi_min) mesh_stats.rssi_min = rssi;
+        if (rssi > mesh_stats.rssi_max) mesh_stats.rssi_max = rssi;
+    }
 
     // Link quality warning
     if (rssi < -100) {
         debug_puts("[LINK] WARNING: Very weak signal (RSSI=");
-        debug_puti(rssi);
+        debug_puti_signed(rssi);
         debug_puts(" dBm)\n");
+        mesh_stats.link_warn_weak++;
     } else if (rssi < -80) {
         debug_puts("[LINK] Weak signal (RSSI=");
-        debug_puti(rssi);
+        debug_puti_signed(rssi);
         debug_puts(" dBm)\n");
+        mesh_stats.link_warn_weak++;
     }
     if (snr < -5) {
         debug_puts("[LINK] WARNING: Low SNR=");
-        debug_puti(snr);
+        debug_puti_signed(snr);
         debug_puts(" dB\n");
+        mesh_stats.link_warn_poor_snr++;
     }
 }
 
@@ -456,13 +466,13 @@ void mesh_print_stats(void) {
     int dh_active = 0;
     for (int i = 0; i < MAX_NODES; i++) if (dh_in_progress[i]) dh_active++;
     debug_puts("  DH in progress:  "); debug_puti(dh_active); debug_puts("\n");
-    debug_puts("  Last RSSI:       "); debug_puti(mesh_stats.last_rssi); debug_puts(" dBm\n");
-    debug_puts("  Last SNR:        "); debug_puti(mesh_stats.last_snr); debug_puts(" dB\n");
+    debug_puts("  Last RSSI:       "); debug_puti_signed(mesh_stats.last_rssi); debug_puts(" dBm\n");
+    debug_puts("  Last SNR:        "); debug_puti_signed(mesh_stats.last_snr); debug_puts(" dB\n");
     if (mesh_stats.rssi_count > 0) {
         int16_t rssi_avg = mesh_stats.rssi_sum / mesh_stats.rssi_count;
         int8_t snr_avg = mesh_stats.snr_sum / mesh_stats.rssi_count;
-        debug_puts("  RSSI avg/min/max:"); debug_puti(rssi_avg); debug_puts("/"); debug_puti(mesh_stats.rssi_min); debug_puts("/"); debug_puti(mesh_stats.rssi_max); debug_puts(" dBm\n");
-        debug_puts("  SNR avg:         "); debug_puti(snr_avg); debug_puts(" dB\n");
+        debug_puts("  RSSI avg/min/max:"); debug_puti_signed(rssi_avg); debug_puts("/"); debug_puti_signed(mesh_stats.rssi_min); debug_puts("/"); debug_puti_signed(mesh_stats.rssi_max); debug_puts(" dBm\n");
+        debug_puts("  SNR avg:         "); debug_puti_signed(snr_avg); debug_puts(" dB\n");
     }
     debug_puts("  Uptime:          "); debug_puti(internal_clock); debug_puts(" ticks\n");
     debug_puts("  Time syncs:      "); debug_puti(time_sync_count); debug_puts("\n");
@@ -488,9 +498,9 @@ void mesh_print_stats(void) {
             debug_puts(" hops=");
             debug_puti(routing_table[i].hop_count);
             debug_puts(" RSSI=");
-            debug_puti(routing_table[i].last_rssi);
+            debug_puti_signed(routing_table[i].last_rssi);
             debug_puts(" SNR=");
-            debug_puti(routing_table[i].last_snr);
+            debug_puti_signed(routing_table[i].last_snr);
             debug_puts("\n");
         }
     }
@@ -704,7 +714,7 @@ int mesh_process_packet(mesh_packet_t *pkt) {
                 debug_puts("[MESH] PONG received from node ");
                 debug_puti(pkt->src_id);
                 debug_puts(" (RSSI=");
-                debug_puti(mesh_stats.last_rssi);
+                debug_puti_signed(mesh_stats.last_rssi);
                 debug_puts(" dBm)\n");
             }
         }

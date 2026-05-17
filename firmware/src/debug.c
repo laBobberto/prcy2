@@ -71,3 +71,9 @@ void debug_puti(uint32_t n) {
     sprintf(buf, "%lu", (unsigned long)n);
     debug_puts(buf);
 }
+
+void debug_puti_signed(int32_t n) {
+    char buf[14];
+    sprintf(buf, "%ld", (long)n);
+    debug_puts(buf);
+}

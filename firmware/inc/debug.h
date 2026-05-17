@@ -11,5 +11,6 @@ void debug_init(void);
 void debug_putc(char c);
 void debug_puts(const char *s);
 void debug_puti(uint32_t n);
+void debug_puti_signed(int32_t n);
 
 #endif
