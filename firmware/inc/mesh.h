@@ -9,7 +9,7 @@
 #define MESH_DEFAULT_TTL 20
 #define MAX_NODES 16
 #define MAX_ROUTES 16
-#define ROUTE_LIFETIME 30000
+#define ROUTE_LIFETIME 120000
 #define MESH_FW_VERSION "1.0.0"
 
 typedef enum {

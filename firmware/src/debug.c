@@ -42,11 +42,32 @@ void debug_init(void) {
 #ifdef USE_USB_CDC
 static uint8_t usb_buf[256];
 extern USBD_HandleTypeDef hUsbDeviceFS;
+
+// Buffered CDC output — avoids per-char USB overhead
+static uint8_t cdc_tx_buf[64];
+static uint8_t cdc_tx_len = 0;
+
+static void cdc_flush(void) {
+    if (cdc_tx_len == 0) return;
+    if (hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED) {
+        USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*)hUsbDeviceFS.pClassData;
+        int timeout = 500;
+        while (hcdc->TxState != 0 && timeout--) { __NOP(); }
+        memcpy(usb_buf, cdc_tx_buf, cdc_tx_len);
+        CDC_Transmit_FS(usb_buf, cdc_tx_len);
+    }
+    cdc_tx_len = 0;
+}
 #endif
 
 void debug_putc(char c) {
     HAL_UART_Transmit(&huart1, (uint8_t *)&c, 1, 10);
-    /* USB CDC: single-char transfers are too slow, rely on debug_puts for bulk */
+#ifdef USE_USB_CDC
+    cdc_tx_buf[cdc_tx_len++] = (uint8_t)c;
+    if (cdc_tx_len >= sizeof(cdc_tx_buf) || c == '\n') {
+        cdc_flush();
+    }
+#endif
 }
 
 void debug_puts(const char *s) {
@@ -54,11 +75,13 @@ void debug_puts(const char *s) {
     int len = strlen(s);
     HAL_UART_Transmit(&huart1, (uint8_t *)s, len, 100);
 #ifdef USE_USB_CDC
+    // Flush any pending putc buffer first
+    cdc_flush();
     if (hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED) {
         USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*)hUsbDeviceFS.pClassData;
         int timeout = 1000;
         while (hcdc->TxState != 0 && timeout--) { __NOP(); }
-        
+
         int send_len = len > 255 ? 255 : len;
         memcpy(usb_buf, s, send_len);
         CDC_Transmit_FS(usb_buf, send_len);

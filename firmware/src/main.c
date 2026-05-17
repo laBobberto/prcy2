@@ -120,6 +120,8 @@ int main(void) {
     mesh_packet_t rx_pkt;
     char cmd_buf[64];
     int cmd_idx = 0;
+    uint32_t last_send_cmd_time = 0;
+    #define CMD_SEND_COOLDOWN_MS 3000  // min 3s between send/ping commands
 
     while(1) {
         mesh_tick();
@@ -170,24 +172,40 @@ int main(void) {
 
                     if (cmd[0] == 's' && cmd[1] == ' ') {
                         // s <dst> <msg>
-                        int dst_val = atoi(&cmd[2]);
-                        char *second_space = strchr(&cmd[2], ' ');
-                        if (second_space) {
-                            char *msg_ptr = second_space + 1;
-                            debug_puts("[CMD] Sending to node ");
-                            debug_puti(dst_val);
-                            debug_puts(": ");
-                            debug_puts(msg_ptr);
-                            debug_puts("\n");
-                            mesh_send_data((uint8_t)dst_val, (uint8_t*)msg_ptr, strlen(msg_ptr));
+                        uint32_t now = HAL_GetTick();
+                        if (now - last_send_cmd_time < CMD_SEND_COOLDOWN_MS) {
+                            debug_puts("[CMD] Rate limit: wait ");
+                            debug_puti(CMD_SEND_COOLDOWN_MS - (now - last_send_cmd_time));
+                            debug_puts("ms\n");
+                        } else {
+                            int dst_val = atoi(&cmd[2]);
+                            char *second_space = strchr(&cmd[2], ' ');
+                            if (second_space) {
+                                char *msg_ptr = second_space + 1;
+                                debug_puts("[CMD] Sending to node ");
+                                debug_puti(dst_val);
+                                debug_puts(": ");
+                                debug_puts(msg_ptr);
+                                debug_puts("\n");
+                                last_send_cmd_time = now;
+                                mesh_send_data((uint8_t)dst_val, (uint8_t*)msg_ptr, strlen(msg_ptr));
+                            }
                         }
                     } else if (cmd[0] == 'p' && cmd[1] == ' ') {
                         // p <node> — ping
-                        int dst_val = atoi(&cmd[2]);
-                        debug_puts("[CMD] Pinging node ");
-                        debug_puti(dst_val);
-                        debug_puts("\n");
-                        mesh_send_data((uint8_t)dst_val, (uint8_t*)"PING", 4);
+                        uint32_t now = HAL_GetTick();
+                        if (now - last_send_cmd_time < CMD_SEND_COOLDOWN_MS) {
+                            debug_puts("[CMD] Rate limit: wait ");
+                            debug_puti(CMD_SEND_COOLDOWN_MS - (now - last_send_cmd_time));
+                            debug_puts("ms\n");
+                        } else {
+                            int dst_val = atoi(&cmd[2]);
+                            debug_puts("[CMD] Pinging node ");
+                            debug_puti(dst_val);
+                            debug_puts("\n");
+                            last_send_cmd_time = now;
+                            mesh_send_data((uint8_t)dst_val, (uint8_t*)"PING", 4);
+                        }
                     } else if (cmd[0] == 'd' && cmd[1] == ' ') {
                         // d <node> — initiate DH key exchange
                         int peer_val = atoi(&cmd[2]);

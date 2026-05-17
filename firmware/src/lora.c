@@ -240,7 +240,7 @@ static int lora_channel_clear(void) {
 #define LBT_BACKOFF_BASE_MS 10
 
 void lora_send_packet(mesh_packet_t *pkt) {
-    led_blink(1);
+    HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13); // LED blink (no delay)
 
     // Listen Before Talk: wait for clear channel
     for (int retry = 0; retry < LBT_MAX_RETRIES; retry++) {

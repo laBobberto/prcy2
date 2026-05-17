@@ -53,7 +53,13 @@ static void mesh_process_rreq(mesh_packet_t *pkt, uint8_t from_node);
 static void mesh_process_rrep(mesh_packet_t *pkt, uint8_t from_node);
 static void mesh_process_rerr(mesh_packet_t *pkt);
 static uint8_t is_time_master = 0;
-static uint32_t time_sync_counter = 0;
+static uint32_t last_time_broadcast = 0;
+static uint32_t last_heartbeat = 0;
+static uint32_t last_route_cleanup = 0;
+static uint32_t last_timestamp_cleanup = 0;
+#define HEARTBEAT_INTERVAL 30000  // 30 seconds
+#define TIME_BROADCAST_INTERVAL_MS 5000  // 5 seconds
+#define ROUTE_CLEANUP_INTERVAL_MS 30000  // 30 seconds
 static int32_t clock_offset = 0;
 static uint32_t time_sync_count = 0;
 static int32_t time_sync_total_offset = 0;
@@ -67,6 +73,22 @@ static uint32_t self_seq_num = 0;
 static uint32_t rreq_id = 0;
 static uint32_t seen_rreq[MAX_NODES];
 static uint32_t last_cleanup_time = 0;
+
+// RREQ backoff: per-destination cooldown
+static uint32_t rreq_last_sent[MAX_NODES];
+static uint8_t  rreq_backoff_count[MAX_NODES];
+#define RREQ_BACKOFF_BASE_MS 2000   // 2s initial backoff
+#define RREQ_BACKOFF_MAX_MS  15000  // 15s max backoff
+
+// Pending packet queue: store one packet per destination while route discovery
+typedef struct {
+    mesh_packet_t pkt;
+    uint8_t active;
+} pending_pkt_t;
+static pending_pkt_t pending_packets[MAX_NODES];
+
+// Forward declaration
+static void mesh_resend_pending(uint8_t dest_id);
 
 static uint8_t dh_ephemeral_priv[32];
 static uint8_t dh_ephemeral_pub[32];
@@ -297,9 +319,16 @@ void mesh_init(uint8_t node_id) {
 
     memset(routing_table, 0, sizeof(routing_table));
     memset(seen_rreq, 0, sizeof(seen_rreq));
+    memset(rreq_last_sent, 0, sizeof(rreq_last_sent));
+    memset(rreq_backoff_count, 0, sizeof(rreq_backoff_count));
+    memset(pending_packets, 0, sizeof(pending_packets));
     is_time_master = (node_id == 1);
     self_seq_num = 0;
     rreq_id = 0;
+    last_time_broadcast = 0;
+    last_heartbeat = 0;
+    last_route_cleanup = 0;
+    last_timestamp_cleanup = 0;
     debug_puts("Mesh System: Kuznyechik E2E + Link-layer encryption active\n");
     if (is_time_master) {
         debug_puts("[TIME] This node is TIME MASTER\n");
@@ -316,9 +345,6 @@ void mesh_set_pairwise_key(uint8_t peer_id, const uint8_t *key) {
     debug_puti(peer_id);
     debug_puts("\n");
 }
-
-static uint32_t heartbeat_counter = 0;
-#define HEARTBEAT_INTERVAL 30000  // 30 seconds
 
 static void mesh_send_heartbeat(void) {
     mesh_packet_t pkt;
@@ -348,23 +374,24 @@ static void mesh_send_heartbeat(void) {
 }
 
 void mesh_tick(void) {
-    internal_clock++;
-    time_sync_counter++;
-    heartbeat_counter++;
+    internal_clock = HAL_GetTick();
 
-    if (is_time_master && time_sync_counter >= 1000) {
+    // Time broadcast every 5 seconds (time master only)
+    if (is_time_master && internal_clock - last_time_broadcast >= TIME_BROADCAST_INTERVAL_MS) {
         mesh_broadcast_time();
-        time_sync_counter = 0;
+        last_time_broadcast = internal_clock;
     }
 
-    // Send heartbeat periodically
-    if (heartbeat_counter >= HEARTBEAT_INTERVAL) {
+    // Heartbeat every 30 seconds
+    if (internal_clock - last_heartbeat >= HEARTBEAT_INTERVAL) {
         mesh_send_heartbeat();
-        heartbeat_counter = 0;
+        last_heartbeat = internal_clock;
     }
 
-    if (internal_clock % 5000 == 0) {
+    // Route cleanup every 30 seconds
+    if (internal_clock - last_route_cleanup >= ROUTE_CLEANUP_INTERVAL_MS) {
         mesh_cleanup_routes();
+        last_route_cleanup = internal_clock;
     }
 
     // Check for DH timeouts and retry
@@ -550,7 +577,7 @@ int mesh_process_packet(mesh_packet_t *pkt) {
                     debug_puti(TIME_SYNC_MAX_CONSECUTIVE_OUTLIERS);
                     debug_puts(" outliers\n");
                 }
-            } else if (time_diff > 100 || time_diff < -100) {
+            } else if (time_diff > 500 || time_diff < -500) {
                 // Large drift: hard sync
                 internal_clock = pkt->timestamp;
                 consecutive_outliers = 0;
@@ -781,6 +808,13 @@ int mesh_process_packet(mesh_packet_t *pkt) {
 
 void mesh_send_data(uint8_t dst_id, const uint8_t *data, uint8_t len) {
     if (dst_id >= MAX_NODES && dst_id != 255) return;
+
+    // Sending to self — no route needed
+    if (dst_id == self_node_id) {
+        debug_puts("[MESH] Loopback to self\n");
+        return;
+    }
+
     mesh_packet_t pkt;
     memset(&pkt, 0, sizeof(pkt));
     pkt.src_id = self_node_id;
@@ -817,23 +851,33 @@ void mesh_send_data(uint8_t dst_id, const uint8_t *data, uint8_t len) {
 
     route_entry_t *route = mesh_find_route(dst_id);
     if (route && route->valid) {
-        // Check if route is stale (not heard from next_hop in a while)
-        if (route->last_rssi == 0 && internal_clock > ROUTE_LIFETIME) {
-            // Route was never heard from directly — might be stale
-            debug_puts("[ROUTE] Warning: route to ");
-            debug_puti(dst_id);
-            debug_puts(" via ");
-            debug_puti(route->next_hop);
-            debug_puts(" has no RSSI data\n");
-        }
         lora_send_packet(&pkt);
     } else {
         debug_puts("[ROUTE] No route to ");
         debug_puti(dst_id);
         debug_puts(", sending RREQ\n");
+        // Queue packet for resend when route is found
+        if (dst_id < MAX_NODES) {
+            memcpy(&pending_packets[dst_id].pkt, &pkt, sizeof(mesh_packet_t));
+            pending_packets[dst_id].active = 1;
+        }
         mesh_send_rreq(dst_id);
-        // Queue packet for later sending (simplified: just send RREQ)
     }
+}
+
+static void mesh_resend_pending(uint8_t dest_id) {
+    if (dest_id >= MAX_NODES) return;
+    if (!pending_packets[dest_id].active) return;
+
+    debug_puts("[MESH] Resending queued packet to node ");
+    debug_puti(dest_id);
+    debug_puts("\n");
+
+    // Recompute link_mic since timestamp may have changed
+    pending_packets[dest_id].pkt.link_mic = mesh_crypto_compute_link_mic(
+        (mesh_crypto_packet_t*)&pending_packets[dest_id].pkt, &session_crypto);
+    lora_send_packet(&pending_packets[dest_id].pkt);
+    pending_packets[dest_id].active = 0;
 }
 
 void mesh_rotate_session_key(const uint8_t *new_key) {
@@ -889,6 +933,14 @@ route_entry_t* mesh_find_route(uint8_t dest_id) {
     return NULL;
 }
 
+// Reset RREQ backoff when route is found (called from mesh_add_route)
+static void mesh_reset_rreq_backoff(uint8_t dest_id) {
+    if (dest_id < MAX_NODES) {
+        rreq_backoff_count[dest_id] = 0;
+        rreq_last_sent[dest_id] = 0;
+    }
+}
+
 void mesh_add_route(uint8_t dest_id, uint8_t next_hop, uint8_t hop_count, uint32_t seq_num) {
     route_entry_t *existing = mesh_find_route(dest_id);
 
@@ -901,6 +953,7 @@ void mesh_add_route(uint8_t dest_id, uint8_t next_hop, uint8_t hop_count, uint32
             existing->lifetime = internal_clock + ROUTE_LIFETIME;
             existing->last_rssi = mesh_stats.last_rssi;
             existing->last_snr = mesh_stats.last_snr;
+            mesh_reset_rreq_backoff(dest_id);
             debug_puts("[AODV] Updated route to ");
             debug_puti(dest_id);
             debug_puts(" via ");
@@ -922,11 +975,15 @@ void mesh_add_route(uint8_t dest_id, uint8_t next_hop, uint8_t hop_count, uint32
             routing_table[i].valid = 1;
             routing_table[i].last_rssi = mesh_stats.last_rssi;
             routing_table[i].last_snr = mesh_stats.last_snr;
+            mesh_reset_rreq_backoff(dest_id);
             debug_puts("[AODV] Added route to ");
             debug_puti(dest_id);
             debug_puts(" via ");
             debug_puti(next_hop);
             debug_puts("\n");
+
+            // Resend any pending packet for this destination
+            mesh_resend_pending(dest_id);
             return;
         }
     }
@@ -981,6 +1038,24 @@ void mesh_cleanup_old_data(void) {
 }
 
 void mesh_send_rreq(uint8_t dest_id) {
+    if (dest_id >= MAX_NODES) return;
+
+    // RREQ backoff: don't flood the channel
+    uint32_t now = HAL_GetTick();
+    uint32_t backoff = RREQ_BACKOFF_BASE_MS << rreq_backoff_count[dest_id];
+    if (backoff > RREQ_BACKOFF_MAX_MS) backoff = RREQ_BACKOFF_MAX_MS;
+    if (rreq_last_sent[dest_id] > 0 && (now - rreq_last_sent[dest_id]) < backoff) {
+        debug_puts("[AODV] RREQ backoff active for dest=");
+        debug_puti(dest_id);
+        debug_puts(" (");
+        debug_puti(backoff - (now - rreq_last_sent[dest_id]));
+        debug_puts("ms remaining)\n");
+        return;
+    }
+
+    rreq_last_sent[dest_id] = now;
+    if (rreq_backoff_count[dest_id] < 4) rreq_backoff_count[dest_id]++;
+
     rreq_id++;
     self_seq_num++;
 
@@ -1005,6 +1080,9 @@ void mesh_send_rreq(uint8_t dest_id) {
 
     pkt.link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)&pkt, &session_crypto);
 
+    // Random jitter to avoid TX collisions with synchronized nodes
+    uint16_t jitter = (HAL_GetTick() * 7 + dest_id * 13 + rreq_id * 31) % 500;
+    if (jitter > 0) HAL_Delay(jitter);
 
     lora_send_packet(&pkt);
 
