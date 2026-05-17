@@ -29,3 +29,5 @@ node5.log
 *.rpm
 compact25519-main/
 tweetnacl_full.c
+tests_x86/test_mesh
+tests_x86/test_mesh2
