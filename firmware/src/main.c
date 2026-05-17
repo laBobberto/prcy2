@@ -194,6 +194,17 @@ int main(void) {
                         debug_puts("[CMD] Battery: ");
                         debug_puti(lora_read_battery());
                         debug_puts(" mV\n");
+                    } else if (cmd_buf[0] == 'm') {
+                        // Memory info
+                        extern char _ebss, _end;
+                        uint32_t sp;
+                        __asm volatile("mov %0, sp" : "=r"(sp));
+                        debug_puts("\n=== MEMORY ===\n");
+                        debug_puts("  Stack ptr: 0x"); debug_puti(sp); debug_puts("\n");
+                        debug_puts("  BSS end:   0x"); debug_puti((uint32_t)&_ebss); debug_puts("\n");
+                        debug_puts("  RAM end:   0x"); debug_puti((uint32_t)&_end); debug_puts("\n");
+                        debug_puts("  Free RAM:  "); debug_puti((uint32_t)&_end - sp); debug_puts(" bytes\n");
+                        debug_puts("=============\n\n");
                     } else if (cmd_buf[0] == 'v') {
                         debug_puts("\n=== FIRMWARE INFO ===\n");
                         debug_puts("  Version:   "); debug_puts(MESH_FW_VERSION); debug_puts("\n");
