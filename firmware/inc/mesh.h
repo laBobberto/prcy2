@@ -28,6 +28,7 @@ typedef enum {
     ENCRYPT_E2E = 2
 } encrypt_mode_t;
 
+#pragma pack(push, 1)
 typedef struct {
     uint8_t  dest_id;
     uint8_t  next_hop;
@@ -36,7 +37,9 @@ typedef struct {
     uint32_t lifetime;
     uint8_t  valid;
 } route_entry_t;
+#pragma pack(pop)
 
+#pragma pack(push, 1)
 typedef struct {
     uint32_t rreq_id;
     uint8_t  dest_id;
@@ -53,6 +56,13 @@ typedef struct {
     uint8_t  hop_count;
     uint32_t lifetime;
 } rrep_payload_t;
+
+typedef struct {
+    uint8_t  unreachable_id;
+    uint32_t unreachable_seq;
+    uint8_t  orig_id;       // who detected the break
+} rerr_payload_t;
+#pragma pack(pop)
 
 #pragma pack(push, 1)
 typedef struct {

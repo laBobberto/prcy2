@@ -351,6 +351,16 @@ int mesh_process_packet(mesh_packet_t *pkt) {
         return 1;
     }
 
+    if (pkt->type == PACKET_TYPE_RERR) {
+        uint32_t expected_link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)pkt, &session_crypto);
+        if (pkt->link_mic != expected_link_mic) {
+            debug_puts("[SECURITY] Link MIC verification FAILED for RERR! Packet dropped.\n");
+            return 0;
+        }
+        mesh_process_rerr(pkt);
+        return 1;
+    }
+
     if (pkt->src_id == self_node_id) return 0;
 
     if (pkt->timestamp <= last_timestamps[pkt->src_id]) {
@@ -630,6 +640,64 @@ void mesh_send_rreq(uint8_t dest_id) {
     debug_puts(" rreq_id=");
     debug_puti(rreq_id);
     debug_puts("\n");
+}
+
+void mesh_send_rerr(uint8_t unreachable_id, uint32_t unreachable_seq) {
+    mesh_packet_t pkt;
+    memset(&pkt, 0, sizeof(pkt));
+    pkt.src_id = self_node_id;
+    pkt.dst_id = 255; // broadcast
+    pkt.type = PACKET_TYPE_RERR;
+    pkt.ttl = MESH_DEFAULT_TTL;
+    pkt.timestamp = internal_clock;
+
+    rerr_payload_t rerr;
+    rerr.unreachable_id = unreachable_id;
+    rerr.unreachable_seq = unreachable_seq;
+    rerr.orig_id = self_node_id;
+
+    memcpy(pkt.payload, &rerr, sizeof(rerr));
+    pkt.payload_len = sizeof(rerr);
+    pkt.link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)&pkt, &session_crypto);
+
+    lora_send_packet(&pkt);
+
+    debug_puts("[AODV] Sent RERR for unreachable=");
+    debug_puti(unreachable_id);
+    debug_puts("\n");
+}
+
+void mesh_process_rerr(mesh_packet_t *pkt) {
+    rerr_payload_t rerr;
+    memcpy(&rerr, pkt->payload, sizeof(rerr));
+
+    debug_puts("[AODV] RERR: node ");
+    debug_puti(rerr.unreachable_id);
+    debug_puts(" unreachable (from ");
+    debug_puti(rerr.orig_id);
+    debug_puts(")\n");
+
+    // Invalidate route to the unreachable node
+    mesh_invalidate_route(rerr.unreachable_id);
+
+    // Invalidate any routes that go through the unreachable node
+    for (int i = 0; i < MAX_ROUTES; i++) {
+        if (routing_table[i].valid && routing_table[i].next_hop == rerr.unreachable_id) {
+            debug_puts("[AODV] Also invalidating route to ");
+            debug_puti(routing_table[i].dest_id);
+            debug_puts(" (went through ");
+            debug_puti(rerr.unreachable_id);
+            debug_puts(")\n");
+            routing_table[i].valid = 0;
+        }
+    }
+
+    // Forward RERR if TTL allows
+    if (pkt->ttl > 1) {
+        pkt->ttl--;
+        pkt->link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)pkt, &session_crypto);
+        lora_send_packet(pkt);
+    }
 }
 
 void mesh_process_rreq(mesh_packet_t *pkt, uint8_t from_node) {

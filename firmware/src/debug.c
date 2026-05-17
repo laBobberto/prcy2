@@ -46,13 +46,7 @@ extern USBD_HandleTypeDef hUsbDeviceFS;
 
 void debug_putc(char c) {
     HAL_UART_Transmit(&huart1, (uint8_t *)&c, 1, 10);
-#ifdef USE_USB_CDC
-    if (hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED) {
-        usb_buf[0] = (uint8_t)c;
-        CDC_Transmit_FS(usb_buf, 1);
-        HAL_Delay(1); // Small delay for single char
-    }
-#endif
+    /* USB CDC: single-char transfers are too slow, rely on debug_puts for bulk */
 }
 
 void debug_puts(const char *s) {
