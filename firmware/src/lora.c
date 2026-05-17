@@ -317,9 +317,9 @@ int lora_check_receive(mesh_packet_t *pkt) {
     int16_t rssi = (int16_t)lora_read_reg(REG_PKT_RSSI_VALUE) - 157 + (snr / 4);
     mesh_update_rssi(rssi, snr);
     debug_puts("[LORA] RX OK RSSI=");
-    debug_puti(rssi);
+    debug_puti_signed(rssi);
     debug_puts(" SNR=");
-    debug_puti(snr);
+    debug_puti_signed(snr);
     debug_puts("\n");
 
     return 1;

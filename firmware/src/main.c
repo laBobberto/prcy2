@@ -137,18 +137,18 @@ int main(void) {
             }
         }
 
-        // 2. Serial Command Receive (for node 1 to send data)
-        // Use non-blocking check for UART1 and USB
+        // 2. Serial Command Receive
+        // Read from USB CDC first (primary), then UART1 (fallback)
         uint8_t c;
         int has_char = 0;
+#ifdef USE_USB_CDC
+        if (VCP_read(&c, 1) > 0) {
+            has_char = 1;
+        } else
+#endif
         if (HAL_UART_Receive(&huart1, &c, 1, 0) == HAL_OK) {
             has_char = 1;
         }
-#ifdef USE_USB_CDC
-        else if (VCP_read(&c, 1) > 0) {
-            has_char = 1;
-        }
-#endif
 
         if (has_char) {
             if (c == '\n' || c == '\r') {
