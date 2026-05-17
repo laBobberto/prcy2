@@ -1,29 +1,29 @@
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include "mesh.h"
+#include "lora.h"
 #include "debug.h"
 #include "stm32f1xx_hal.h"
-
-void lora_init(void);
-void lora_send_packet(mesh_packet_t *pkt);
-int lora_check_receive(mesh_packet_t *pkt);
 
 void SysTick_Handler(void) {
     HAL_IncTick();
 }
 
 void SystemClock_Config(void) {
-    // Basic HSI clock config for F103
     RCC_OscInitTypeDef RCC_OscInitStruct = {0};
     RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+    RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
 
-    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+    // Use HSE (External Crystal) for stability required by USB
+    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+    RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+    RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
     RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-    RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
     RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-    RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI_DIV2;
-    RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL12; // 4MHz * 12 = 48MHz
+    RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+    RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9; // 8MHz * 9 = 72MHz
     HAL_RCC_OscConfig(&RCC_OscInitStruct);
 
     RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
@@ -32,46 +32,86 @@ void SystemClock_Config(void) {
     RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
     RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
     RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
-    HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1);
+    HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2);
+
+    // USB clock must be exactly 48MHz. 72MHz / 1.5 = 48MHz
+    PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USB;
+    PeriphClkInit.UsbClockSelection = RCC_USBCLKSOURCE_PLL_DIV1_5;
+    HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit);
 }
 
-// Loopback function for node 2
-void handle_loopback(mesh_packet_t *rx_pkt) {
+// Loopback function for node 2 — called AFTER mesh_process_packet decrypts the payload
+static void handle_loopback(mesh_packet_t *rx_pkt) {
     if (rx_pkt->type == PACKET_TYPE_DATA && rx_pkt->dst_id == 2) {
         debug_puts("[LOOPBACK] Echoing data back to ");
         debug_puti(rx_pkt->src_id);
         debug_puts("\n");
-        
-        // Decrypt if needed, but here we can just send it back as is (it will be re-encrypted by mesh_send_data)
-        // Or we can just swap src/dst and send. 
-        // Better use mesh_send_data to ensure proper sequence numbers/MICs.
-        
-        // Extract plain text if possible (for debug)
-        char echo_buf[MAX_PAYLOAD_SIZE];
-        memcpy(echo_buf, rx_pkt->payload, rx_pkt->payload_len);
-        
-        mesh_send_data(rx_pkt->src_id, (uint8_t*)echo_buf, rx_pkt->payload_len);
+
+        mesh_send_data(rx_pkt->src_id, rx_pkt->payload, rx_pkt->payload_len);
     }
+}
+
+#ifdef USE_USB_CDC
+#include "usbd_core.h"
+#include "usbd_desc.h"
+#include "usbd_cdc.h"
+#include "usbd_cdc_if.h"
+USBD_HandleTypeDef hUsbDeviceFS;
+extern int VCP_read(uint8_t* buf, uint16_t len);
+#endif
+
+void led_init(void) {
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    GPIO_InitStruct.Pin = GPIO_PIN_13;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET); // LED OFF (Active Low)
+}
+
+void led_blink(int times) {
+    for (int i = 0; i < times * 2; i++) {
+        HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+        HAL_Delay(200); // 200ms is more visible
+    }
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET); // Ensure OFF
 }
 
 int main(void) {
     HAL_Init();
     SystemClock_Config();
     debug_init();
+    led_init();
+    led_blink(3); // TEST BLINK AT STARTUP
     lora_init();
 
-    // In a real scenario, node_id could be read from DIP switches or Flash
-    // For now, let's assume node 1 is the sender and node 2 is the loopback
-    // You can change this per board before flashing
-    uint8_t node_id = 1; 
-#ifdef WORK_AS_LOOPBACK_FOR_NODE_2
-    node_id = 2;
+#ifdef USE_USB_CDC
+    if (USBD_Init(&hUsbDeviceFS, &VCP_Desc, 0) == USBD_OK) {
+        USBD_RegisterClass(&hUsbDeviceFS, &USBD_CDC);
+        USBD_CDC_RegisterInterface(&hUsbDeviceFS, &USBD_Interface_fopsFS);
+        USBD_Start(&hUsbDeviceFS);
+    }
 #endif
 
+    // Use NODE_ID from build flags, default to 1
+#ifndef NODE_ID
+#define NODE_ID 1
+#endif
+    uint8_t node_id = NODE_ID;
+
     mesh_init(node_id);
-    debug_puts("\n--- MESH NODE ");
+    debug_puts("\n==========================================\n");
+    debug_puts("MESH NODE ");
     debug_puti(node_id);
-    debug_puts(" STARTED ---\n");
+    debug_puts(" STARTED\n");
+#ifdef WORK_AS_LOOPBACK_FOR_NODE_2
+    debug_puts("MODE: LOOPBACK (ECHO)\n");
+#else
+    debug_puts("MODE: SENDER/RELAY\n");
+#endif
+    debug_puts("==========================================\n");
 
     mesh_packet_t rx_pkt;
     char cmd_buf[64];
@@ -83,31 +123,58 @@ int main(void) {
         // 1. Radio Receive
         if (lora_check_receive(&rx_pkt)) {
             if (rx_pkt.dst_id == node_id || rx_pkt.dst_id == 255) {
-                if (node_id == 2) {
+                if (mesh_process_packet(&rx_pkt)) {
+#ifdef WORK_AS_LOOPBACK_FOR_NODE_2
                     handle_loopback(&rx_pkt);
+#endif
                 }
-                mesh_process_packet(&rx_pkt);
             } else {
-                // Relay logic is inside mesh_process_packet usually, 
-                // but let's call it to handle routing
                 mesh_process_packet(&rx_pkt);
             }
         }
 
         // 2. Serial Command Receive (for node 1 to send data)
-        // Use non-blocking check for UART1
+        // Use non-blocking check for UART1 and USB
         uint8_t c;
-        extern UART_HandleTypeDef huart1;
+        int has_char = 0;
         if (HAL_UART_Receive(&huart1, &c, 1, 0) == HAL_OK) {
+            has_char = 1;
+        }
+#ifdef USE_USB_CDC
+        else if (VCP_read(&c, 1) > 0) {
+            has_char = 1;
+        }
+#endif
+
+        if (has_char) {
             if (c == '\n' || c == '\r') {
-                cmd_buf[cmd_idx] = '\0';
-                if (cmd_idx > 0 && cmd_buf[0] == 's') {
-                    // s <dst> <msg>
-                    int dst = cmd_buf[2] - '0';
-                    char *msg = &cmd_buf[4];
-                    mesh_send_data((uint8_t)dst, (uint8_t*)msg, strlen(msg));
+                if (cmd_idx > 0) {
+                    cmd_buf[cmd_idx] = '\0';
+                    debug_puts("[CMD] Processing: ");
+                    debug_puts(cmd_buf);
+                    debug_puts("\n");
+
+                    if (cmd_buf[0] == 's') {
+                        // s <dst> <msg>
+                        int dst_val = 0;
+                        char *msg_ptr = NULL;
+                        
+                        // Simple manual parsing as fallback for sscanf
+                        if (cmd_buf[1] == ' ') {
+                            dst_val = atoi(&cmd_buf[2]);
+                            // Find second space
+                            char *second_space = strchr(&cmd_buf[2], ' ');
+                            if (second_space) {
+                                msg_ptr = second_space + 1;
+                                debug_puts("[AODV] Sending data to ");
+                                debug_puti(dst_val);
+                                debug_puts("\n");
+                                mesh_send_data((uint8_t)dst_val, (uint8_t*)msg_ptr, strlen(msg_ptr));
+                            }
+                        }
+                    }
+                    cmd_idx = 0;
                 }
-                cmd_idx = 0;
             } else if (cmd_idx < 60) {
                 cmd_buf[cmd_idx++] = c;
             }

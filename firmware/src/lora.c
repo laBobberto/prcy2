@@ -1,5 +1,6 @@
 
 #include "mesh.h"
+#include "lora.h"
 #include "debug.h"
 #include "stm32f1xx_hal.h"
 
@@ -122,7 +123,10 @@ void lora_init(void) {
     lora_write_reg(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_STDBY);
 }
 
+extern void led_blink(int times);
+
 void lora_send_packet(mesh_packet_t *pkt) {
+    led_blink(1); // Blink once on send
     lora_write_reg(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_STDBY);
     lora_write_reg(REG_FIFO_ADDR_PTR, 0);
     

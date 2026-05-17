@@ -7,8 +7,8 @@
 
 #define MAX_PAYLOAD_SIZE 128
 #define MESH_DEFAULT_TTL 20
-#define MAX_NODES 256
-#define MAX_ROUTES 32
+#define MAX_NODES 16
+#define MAX_ROUTES 16
 #define ROUTE_LIFETIME 30000
 
 typedef enum {
@@ -70,7 +70,7 @@ typedef struct {
 #pragma pack(pop)
 
 void mesh_init(uint8_t node_id);
-void mesh_process_packet(mesh_packet_t *pkt);
+int mesh_process_packet(mesh_packet_t *pkt);
 void mesh_send_data(uint8_t dst_id, const uint8_t *data, uint8_t len);
 void mesh_set_pairwise_key(uint8_t peer_id, const uint8_t *key);
 void mesh_rotate_session_key(const uint8_t *new_key);

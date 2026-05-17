@@ -2,8 +2,8 @@
 CC = arm-none-eabi-gcc
 OBJCOPY = arm-none-eabi-objcopy
 
-CFLAGS = -mcpu=cortex-m4 -mthumb -O2 -Wall -g -Iinc -Ilib/kuznyechik -Ilib/crypto
-LDFLAGS = -specs=nosys.specs -T stm32f4.ld
+CFLAGS = -mcpu=cortex-m3 -mthumb -O2 -Wall -g -Iinc -Ilib/kuznyechik -Ilib/crypto
+LDFLAGS = -specs=nosys.specs -T stm32f103.ld
 
 SRC = src/mesh.c lib/kuznyechik/kuznyechik.c lib/crypto/mesh_crypto.c \
       lib/crypto/f25519.c lib/crypto/fprime.c lib/crypto/sha512.c \

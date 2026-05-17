@@ -5,8 +5,9 @@
 #include <stddef.h>
 #include "kuznyechik.h"
 
-// Структуры (выделены из mesh.h для независимости)
-// Используем анонимную структуру или просто передаем указатели
+// Структура пакета для вычисления MIC.
+// Должна ТОЧНО совпадать по layout с mesh_packet_t из mesh.h
+#pragma pack(push, 1)
 typedef struct {
     uint8_t  src_id;
     uint8_t  dst_id;
@@ -15,10 +16,11 @@ typedef struct {
     uint32_t timestamp;
     uint8_t  payload_len;
     uint8_t  e2e_encrypted;
-    uint8_t  payload[64];
-    uint32_t e2e_mic;    // Увеличено до 32 бит согласно плану
-    uint32_t link_mic;   // Увеличено до 32 бит согласно плану
+    uint8_t  payload[128];
+    uint32_t e2e_mic;
+    uint32_t link_mic;
 } mesh_crypto_packet_t;
+#pragma pack(pop)
 
 /**
  * @brief Режим CTR для Кузнечика (портативный)

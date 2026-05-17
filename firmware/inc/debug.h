@@ -3,6 +3,9 @@
 #define DEBUG_H
 
 #include <stdint.h>
+#include "stm32f1xx_hal.h"
+
+extern UART_HandleTypeDef huart1;
 
 void debug_init(void);
 void debug_putc(char c);

@@ -19,7 +19,7 @@ void mesh_crypto_ctr(kuznyechik_ctx_t *ctx, uint32_t nonce, uint8_t *data, uint8
 }
 
 uint32_t mesh_crypto_compute_e2e_mic(mesh_crypto_packet_t *pkt, kuznyechik_ctx_t *key) {
-    uint8_t mac_data[128];
+    uint8_t mac_data[160];
     int offset = 0;
 
     mac_data[offset++] = pkt->src_id;
@@ -39,7 +39,7 @@ uint32_t mesh_crypto_compute_e2e_mic(mesh_crypto_packet_t *pkt, kuznyechik_ctx_t
 }
 
 uint32_t mesh_crypto_compute_link_mic(mesh_crypto_packet_t *pkt, kuznyechik_ctx_t *session_key) {
-    uint8_t mac_data[128];
+    uint8_t mac_data[160];
     int offset = 0;
 
     mac_data[offset++] = pkt->src_id;

@@ -1,8 +1,8 @@
 
 MEMORY
 {
-    FLASH (rx) : ORIGIN = 0x08000000, LENGTH = 512K
-    RAM (rwx)  : ORIGIN = 0x20000000, LENGTH = 128K
+    FLASH (rx) : ORIGIN = 0x08000000, LENGTH = 64K
+    RAM (rwx)  : ORIGIN = 0x20000000, LENGTH = 20K
 }
 
 SECTIONS
@@ -53,6 +53,6 @@ SECTIONS
         end = .;
         _end = .;
         *(.heap*)
-        . = . + 0x1000; /* 4KB heap */
+        . = . + 0x400; /* 1KB heap */
     } > RAM
 }
