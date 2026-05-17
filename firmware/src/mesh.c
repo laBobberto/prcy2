@@ -310,13 +310,50 @@ void mesh_set_pairwise_key(uint8_t peer_id, const uint8_t *key) {
     debug_puts("\n");
 }
 
+static uint32_t heartbeat_counter = 0;
+#define HEARTBEAT_INTERVAL 30000  // 30 seconds
+
+static void mesh_send_heartbeat(void) {
+    mesh_packet_t pkt;
+    memset(&pkt, 0, sizeof(pkt));
+    pkt.src_id = self_node_id;
+    pkt.dst_id = 255;  // broadcast
+    pkt.type = PACKET_TYPE_HEARTBEAT;
+    pkt.ttl = 1;  // single hop only
+    pkt.timestamp = internal_clock;
+
+    heartbeat_payload_t hb;
+    hb.uptime = internal_clock;
+    extern uint16_t lora_read_battery(void);
+    hb.battery_mv = lora_read_battery();
+    hb.rssi = mesh_stats.last_rssi;
+    hb.snr = mesh_stats.last_snr;
+    int routes = 0;
+    for (int i = 0; i < MAX_ROUTES; i++) if (routing_table[i].valid) routes++;
+    hb.route_count = routes;
+    hb.fw_version = 100;  // v1.0.0
+
+    memcpy(pkt.payload, &hb, sizeof(hb));
+    pkt.payload_len = sizeof(hb);
+    pkt.link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)&pkt, &session_crypto);
+
+    lora_send_packet(&pkt);
+}
+
 void mesh_tick(void) {
     internal_clock++;
     time_sync_counter++;
+    heartbeat_counter++;
 
     if (is_time_master && time_sync_counter >= 1000) {
         mesh_broadcast_time();
         time_sync_counter = 0;
+    }
+
+    // Send heartbeat periodically
+    if (heartbeat_counter >= HEARTBEAT_INTERVAL) {
+        mesh_send_heartbeat();
+        heartbeat_counter = 0;
     }
 
     if (internal_clock % 5000 == 0) {
@@ -513,9 +550,31 @@ int mesh_process_packet(mesh_packet_t *pkt) {
 
         if (pkt->dst_id == 255 && pkt->ttl > 0) {
             pkt->ttl--;
-        
+
             lora_send_packet(pkt);
         }
+        return 1;
+    }
+
+    if (pkt->type == PACKET_TYPE_HEARTBEAT) {
+        if (pkt->src_id != self_node_id && pkt->payload_len >= sizeof(heartbeat_payload_t)) {
+            heartbeat_payload_t hb;
+            memcpy(&hb, pkt->payload, sizeof(hb));
+            debug_puts("[HEARTBEAT] Node ");
+            debug_puti(pkt->src_id);
+            debug_puts(" uptime=");
+            debug_puti(hb.uptime);
+            debug_puts(" batt=");
+            debug_puti(hb.battery_mv);
+            debug_puts("mV RSSI=");
+            debug_puti(hb.rssi);
+            debug_puts(" routes=");
+            debug_puti(hb.route_count);
+            debug_puts("\n");
+            // Update route to this node (direct neighbor)
+            mesh_update_route_lifetime(pkt->src_id);
+        }
+        // Don't forward heartbeats (TTL=1)
         return 1;
     }
 

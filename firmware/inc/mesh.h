@@ -20,7 +20,8 @@ typedef enum {
     PACKET_TYPE_KEY_ROTATION = 4,
     PACKET_TYPE_RERR = 5,
     PACKET_TYPE_DH_REQ = 6,
-    PACKET_TYPE_DH_REP = 7
+    PACKET_TYPE_DH_REP = 7,
+    PACKET_TYPE_HEARTBEAT = 8
 } packet_type_t;
 
 typedef enum {
@@ -65,6 +66,15 @@ typedef struct {
     uint32_t unreachable_seq;
     uint8_t  orig_id;       // who detected the break
 } rerr_payload_t;
+
+typedef struct {
+    uint32_t uptime;
+    uint16_t battery_mv;
+    int8_t   rssi;
+    int8_t   snr;
+    uint8_t  route_count;
+    uint8_t  fw_version;    // 100 = v1.0.0
+} heartbeat_payload_t;
 #pragma pack(pop)
 
 #pragma pack(push, 1)
