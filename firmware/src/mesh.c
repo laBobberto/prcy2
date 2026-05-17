@@ -576,13 +576,27 @@ int mesh_process_packet(mesh_packet_t *pkt) {
     if (pkt->src_id == self_node_id) return 0;
 
     if (pkt->timestamp <= last_timestamps[pkt->src_id]) {
-        if (internal_clock - pkt->timestamp > 60000) {
-            debug_puts("[SECURITY] Packet too old, dropping\n");
+        // Check if this is a replay or just out-of-order
+        uint32_t age = internal_clock - pkt->timestamp;
+        if (age > 60000) {
+            debug_puts("[SECURITY] Packet too old (age=");
+            debug_puti(age);
+            debug_puts("ms), dropping\n");
+            mesh_stats.rx_dropped_old++;
+            return 0;
+        }
+        // Small window — likely replay attack
+        if (age < 1000 && pkt->timestamp == last_timestamps[pkt->src_id]) {
+            debug_puts("[SECURITY] Possible replay attack from node ");
+            debug_puti(pkt->src_id);
+            debug_puts(" (same timestamp)\n");
             mesh_stats.rx_dropped_old++;
             return 0;
         }
     }
-    last_timestamps[pkt->src_id] = pkt->timestamp;
+    if (pkt->timestamp > last_timestamps[pkt->src_id]) {
+        last_timestamps[pkt->src_id] = pkt->timestamp;
+    }
 
     uint32_t expected_link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)pkt, &session_crypto);
     if (pkt->link_mic != expected_link_mic) {
