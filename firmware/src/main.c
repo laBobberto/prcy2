@@ -40,6 +40,7 @@ void SystemClock_Config(void) {
     HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit);
 }
 
+#ifdef WORK_AS_LOOPBACK_FOR_NODE_2
 // Loopback function for node 2 — called AFTER mesh_process_packet decrypts the payload
 static void handle_loopback(mesh_packet_t *rx_pkt) {
     if (rx_pkt->type == PACKET_TYPE_DATA && rx_pkt->dst_id == 2) {
@@ -50,6 +51,7 @@ static void handle_loopback(mesh_packet_t *rx_pkt) {
         mesh_send_data(rx_pkt->src_id, rx_pkt->payload, rx_pkt->payload_len);
     }
 }
+#endif
 
 #ifdef USE_USB_CDC
 #include "usbd_core.h"
