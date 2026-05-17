@@ -616,6 +616,22 @@ int mesh_process_packet(mesh_packet_t *pkt) {
                 debug_putc(pkt->payload[i]);
             }
             debug_puts("\n");
+
+            // Auto-reply to PING with PONG
+            if (pkt->payload_len == 4 && memcmp(pkt->payload, "PING", 4) == 0) {
+                debug_puts("[MESH] PING received from ");
+                debug_puti(pkt->src_id);
+                debug_puts(", sending PONG\n");
+                mesh_send_data(pkt->src_id, (uint8_t*)"PONG", 4);
+            }
+            // Auto-print PONG replies
+            if (pkt->payload_len == 4 && memcmp(pkt->payload, "PONG", 4) == 0) {
+                debug_puts("[MESH] PONG received from node ");
+                debug_puti(pkt->src_id);
+                debug_puts(" (RSSI=");
+                debug_puti(mesh_stats.last_rssi);
+                debug_puts(" dBm)\n");
+            }
         }
     }
 
