@@ -71,7 +71,7 @@ void mesh_get_random(uint8_t *buf, uint8_t len) {
 }
 
 
-void secure_memset(void *v, int c, size_t n) {
+static void secure_memset(void *v, int c, size_t n) {
     volatile uint8_t *p = (volatile uint8_t *)v;
     while (n--) *p++ = c;
 }

@@ -1,8 +1,8 @@
 
 #include "usbd_cdc_if.h"
 
-#define APP_RX_DATA_SIZE  2048
-#define APP_TX_DATA_SIZE  2048
+#define APP_RX_DATA_SIZE  256
+#define APP_TX_DATA_SIZE  256
 
 extern USBD_HandleTypeDef hUsbDeviceFS;
 

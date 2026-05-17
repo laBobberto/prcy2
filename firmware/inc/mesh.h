@@ -78,6 +78,14 @@ void mesh_broadcast_time(void);
 void mesh_tick(void);
 uint32_t mesh_get_time(void);
 
+// Identity and key exchange
+void mesh_set_identity_key(const uint8_t *priv);
+void mesh_set_node_identity(uint8_t id, const uint8_t *pub);
+void mesh_init_dh(uint8_t peer_id);
+void mesh_process_dh_req(mesh_packet_t *pkt);
+void mesh_process_dh_rep(mesh_packet_t *pkt);
+void mesh_get_random(uint8_t *buf, uint8_t len);
+
 // AODV routing functions
 route_entry_t* mesh_find_route(uint8_t dest_id);
 void mesh_add_route(uint8_t dest_id, uint8_t next_hop, uint8_t hop_count, uint32_t seq_num);
