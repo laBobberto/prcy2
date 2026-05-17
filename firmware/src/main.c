@@ -230,6 +230,7 @@ int main(void) {
                         debug_puts("  r              Show routing table\n");
                         debug_puts("  i              Show statistics\n");
                         debug_puts("  b              Show battery voltage\n");
+                        debug_puts("  m              Show memory usage\n");
                         debug_puts("  v              Show firmware version\n");
                         debug_puts("  h              Show this help\n");
                         debug_puts("================\n\n");
