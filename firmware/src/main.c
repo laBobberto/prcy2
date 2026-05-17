@@ -156,24 +156,29 @@ int main(void) {
                     debug_puts(cmd_buf);
                     debug_puts("\n");
 
-                    if (cmd_buf[0] == 's') {
+                    if (cmd_buf[0] == 's' && cmd_buf[1] == ' ') {
                         // s <dst> <msg>
-                        int dst_val = 0;
-                        char *msg_ptr = NULL;
-                        
-                        // Simple manual parsing as fallback for sscanf
-                        if (cmd_buf[1] == ' ') {
-                            dst_val = atoi(&cmd_buf[2]);
-                            // Find second space
-                            char *second_space = strchr(&cmd_buf[2], ' ');
-                            if (second_space) {
-                                msg_ptr = second_space + 1;
-                                debug_puts("[AODV] Sending data to ");
-                                debug_puti(dst_val);
-                                debug_puts("\n");
-                                mesh_send_data((uint8_t)dst_val, (uint8_t*)msg_ptr, strlen(msg_ptr));
-                            }
+                        int dst_val = atoi(&cmd_buf[2]);
+                        char *second_space = strchr(&cmd_buf[2], ' ');
+                        if (second_space) {
+                            char *msg_ptr = second_space + 1;
+                            debug_puts("[CMD] Sending to node ");
+                            debug_puti(dst_val);
+                            debug_puts(": ");
+                            debug_puts(msg_ptr);
+                            debug_puts("\n");
+                            mesh_send_data((uint8_t)dst_val, (uint8_t*)msg_ptr, strlen(msg_ptr));
                         }
+                    } else if (cmd_buf[0] == 'i') {
+                        mesh_print_stats();
+                    } else if (cmd_buf[0] == 'h') {
+                        debug_puts("\n=== COMMANDS ===\n");
+                        debug_puts("  s <dst> <msg>  Send message to node\n");
+                        debug_puts("  i              Show statistics\n");
+                        debug_puts("  h              Show this help\n");
+                        debug_puts("================\n\n");
+                    } else {
+                        debug_puts("[CMD] Unknown command. Type 'h' for help.\n");
                     }
                     cmd_idx = 0;
                 }

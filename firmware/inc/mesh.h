@@ -88,6 +88,11 @@ void mesh_broadcast_time(void);
 void mesh_tick(void);
 uint32_t mesh_get_time(void);
 
+// Statistics
+void mesh_print_stats(void);
+void mesh_notify_tx(void);  // called by lora_send_packet
+void mesh_update_rssi(int16_t rssi, int8_t snr);  // called by lora_check_receive
+
 // Identity and key exchange
 void mesh_set_identity_key(const uint8_t *priv);
 void mesh_set_node_identity(uint8_t id, const uint8_t *pub);
@@ -104,7 +109,5 @@ void mesh_invalidate_route(uint8_t dest_id);
 void mesh_cleanup_routes(void);
 void mesh_cleanup_old_data(void);
 void mesh_send_rreq(uint8_t dest_id);
-void mesh_process_rreq(mesh_packet_t *pkt, uint8_t from_node);
-void mesh_process_rrep(mesh_packet_t *pkt, uint8_t from_node);
 
 #endif // MESH_H

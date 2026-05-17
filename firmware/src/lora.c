@@ -211,6 +211,7 @@ void lora_send_packet(mesh_packet_t *pkt) {
     while (!(lora_read_reg(REG_IRQ_FLAGS) & IRQ_TX_DONE));
     lora_write_reg(REG_IRQ_FLAGS, IRQ_TX_DONE);
 
+    mesh_notify_tx();
     debug_puts("[LORA] TX done (");
     debug_puti(pkt_size);
     debug_puts(" bytes)\n");
@@ -255,6 +256,7 @@ int lora_check_receive(mesh_packet_t *pkt) {
 
     int8_t snr = (int8_t)lora_read_reg(REG_PKT_SNR_VALUE);
     int16_t rssi = (int16_t)lora_read_reg(REG_PKT_RSSI_VALUE) - 157 + (snr / 4);
+    mesh_update_rssi(rssi, snr);
     debug_puts("[LORA] RX OK RSSI=");
     debug_puti(rssi);
     debug_puts(" SNR=");

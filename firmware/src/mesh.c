@@ -18,7 +18,32 @@ static uint8_t pairwise_keys_set[MAX_NODES];
 static uint32_t pairwise_packet_counts[MAX_NODES];
 static uint8_t master_key[32] = "MASTER_KEY_2026_STAY_SAFE_!!!!!";
 static uint32_t last_timestamps[MAX_NODES];
+
+// Packet statistics
+static struct {
+    uint32_t tx_count;
+    uint32_t rx_count;
+    uint32_t rx_routed;
+    uint32_t rx_dropped_mic;
+    uint32_t rx_dropped_ttl;
+    uint32_t rx_dropped_old;
+    uint32_t rx_dropped_crc;
+    uint32_t rreq_sent;
+    uint32_t rreq_received;
+    uint32_t rrep_sent;
+    uint32_t rrep_received;
+    uint32_t rerr_sent;
+    uint32_t rerr_received;
+    uint32_t e2e_decrypted;
+    int16_t  last_rssi;
+    int8_t   last_snr;
+} mesh_stats;
 static uint32_t internal_clock = 0;
+
+// Forward declarations
+static void mesh_process_rreq(mesh_packet_t *pkt, uint8_t from_node);
+static void mesh_process_rrep(mesh_packet_t *pkt, uint8_t from_node);
+static void mesh_process_rerr(mesh_packet_t *pkt);
 static uint8_t is_time_master = 0;
 static uint32_t time_sync_counter = 0;
 static int32_t clock_offset = 0;
@@ -216,10 +241,20 @@ void mesh_init(uint8_t node_id) {
     memset(dh_in_progress, 0, sizeof(dh_in_progress));
     memset(node_identity_set, 0, sizeof(node_identity_set));
 
-    // Generate a default identity based on node_id for testing
-    uint8_t dummy_priv[32];
-    memset(dummy_priv, node_id, 32);
-    mesh_set_identity_key(dummy_priv);
+    // Generate identity key from MCU UID (deterministic but unique per chip)
+    uint8_t identity_priv[32];
+    uint32_t uid0 = *(volatile uint32_t*)0x1FFFF7E8;
+    uint32_t uid1 = *(volatile uint32_t*)0x1FFFF7EC;
+    uint32_t uid2 = *(volatile uint32_t*)0x1FFFF7F0;
+    // Mix UID with node_id and master_key for deterministic derivation
+    for (int i = 0; i < 32; i++) {
+        identity_priv[i] = master_key[i] ^ (uint8_t)(uid0 >> (i % 4 * 8))
+                         ^ (uint8_t)(uid1 >> ((i + 1) % 4 * 8))
+                         ^ (uint8_t)(uid2 >> ((i + 2) % 4 * 8))
+                         ^ (uint8_t)(node_id + i);
+    }
+    mesh_set_identity_key(identity_priv);
+    secure_memset(identity_priv, 0, sizeof(identity_priv));
 
     memset(routing_table, 0, sizeof(routing_table));
     memset(seen_rreq, 0, sizeof(seen_rreq));
@@ -266,8 +301,44 @@ uint32_t mesh_get_time(void) {
     return internal_clock;
 }
 
+void mesh_notify_tx(void) {
+    mesh_stats.tx_count++;
+}
+
+void mesh_update_rssi(int16_t rssi, int8_t snr) {
+    mesh_stats.last_rssi = rssi;
+    mesh_stats.last_snr = snr;
+}
+
+void mesh_print_stats(void) {
+    debug_puts("\n=== MESH STATISTICS ===\n");
+    debug_puts("  TX packets:      "); debug_puti(mesh_stats.tx_count); debug_puts("\n");
+    debug_puts("  RX packets:      "); debug_puti(mesh_stats.rx_count); debug_puts("\n");
+    debug_puts("  RX routed:       "); debug_puti(mesh_stats.rx_routed); debug_puts("\n");
+    debug_puts("  RX dropped MIC:  "); debug_puti(mesh_stats.rx_dropped_mic); debug_puts("\n");
+    debug_puts("  RX dropped TTL:  "); debug_puti(mesh_stats.rx_dropped_ttl); debug_puts("\n");
+    debug_puts("  RX dropped old:  "); debug_puti(mesh_stats.rx_dropped_old); debug_puts("\n");
+    debug_puts("  RX CRC errors:   "); debug_puti(mesh_stats.rx_dropped_crc); debug_puts("\n");
+    debug_puts("  RREQ sent/rcv:   "); debug_puti(mesh_stats.rreq_sent); debug_puts("/"); debug_puti(mesh_stats.rreq_received); debug_puts("\n");
+    debug_puts("  RREP sent/rcv:   "); debug_puti(mesh_stats.rrep_sent); debug_puts("/"); debug_puti(mesh_stats.rrep_received); debug_puts("\n");
+    debug_puts("  RERR sent/rcv:   "); debug_puti(mesh_stats.rerr_sent); debug_puts("/"); debug_puti(mesh_stats.rerr_received); debug_puts("\n");
+    debug_puts("  E2E decrypted:   "); debug_puti(mesh_stats.e2e_decrypted); debug_puts("\n");
+    debug_puts("  Last RSSI:       "); debug_puti(mesh_stats.last_rssi); debug_puts(" dBm\n");
+    debug_puts("  Last SNR:        "); debug_puti(mesh_stats.last_snr); debug_puts(" dB\n");
+    debug_puts("  Uptime:          "); debug_puti(internal_clock); debug_puts(" ticks\n");
+    debug_puts("  Routes active:   ");
+    int routes = 0;
+    for (int i = 0; i < MAX_ROUTES; i++) if (routing_table[i].valid) routes++;
+    debug_puti(routes);
+    debug_puts("/");
+    debug_puti(MAX_ROUTES);
+    debug_puts("\n");
+    debug_puts("=======================\n\n");
+}
+
 int mesh_process_packet(mesh_packet_t *pkt) {
-    if (pkt->ttl == 0) return 0;
+    mesh_stats.rx_count++;
+    if (pkt->ttl == 0) { mesh_stats.rx_dropped_ttl++; return 0; }
     if (pkt->src_id >= MAX_NODES) return 0;
     if (pkt->dst_id >= MAX_NODES && pkt->dst_id != 255) return 0;
 
@@ -335,8 +406,10 @@ int mesh_process_packet(mesh_packet_t *pkt) {
         uint32_t expected_link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)pkt, &session_crypto);
         if (pkt->link_mic != expected_link_mic) {
             debug_puts("[SECURITY] Link MIC verification FAILED! Packet dropped.\n");
+            mesh_stats.rx_dropped_mic++;
             return 0;
         }
+        mesh_stats.rreq_received++;
         mesh_process_rreq(pkt, pkt->src_id);
         return 1;
     }
@@ -345,8 +418,10 @@ int mesh_process_packet(mesh_packet_t *pkt) {
         uint32_t expected_link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)pkt, &session_crypto);
         if (pkt->link_mic != expected_link_mic) {
             debug_puts("[SECURITY] Link MIC verification FAILED! Packet dropped.\n");
+            mesh_stats.rx_dropped_mic++;
             return 0;
         }
+        mesh_stats.rrep_received++;
         mesh_process_rrep(pkt, pkt->src_id);
         return 1;
     }
@@ -355,8 +430,10 @@ int mesh_process_packet(mesh_packet_t *pkt) {
         uint32_t expected_link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)pkt, &session_crypto);
         if (pkt->link_mic != expected_link_mic) {
             debug_puts("[SECURITY] Link MIC verification FAILED for RERR! Packet dropped.\n");
+            mesh_stats.rx_dropped_mic++;
             return 0;
         }
+        mesh_stats.rerr_received++;
         mesh_process_rerr(pkt);
         return 1;
     }
@@ -366,6 +443,7 @@ int mesh_process_packet(mesh_packet_t *pkt) {
     if (pkt->timestamp <= last_timestamps[pkt->src_id]) {
         if (internal_clock - pkt->timestamp > 60000) {
             debug_puts("[SECURITY] Packet too old, dropping\n");
+            mesh_stats.rx_dropped_old++;
             return 0;
         }
     }
@@ -385,9 +463,11 @@ int mesh_process_packet(mesh_packet_t *pkt) {
             uint32_t expected_e2e_mic = mesh_crypto_compute_e2e_mic((mesh_crypto_packet_t*)pkt, &pairwise_keys[pkt->src_id]);
             if (pkt->e2e_mic != expected_e2e_mic) {
                 debug_puts("[SECURITY] E2E MIC verification FAILED! Data might be tampered.\n");
+                mesh_stats.rx_dropped_mic++;
                 return 0;
             }
             pairwise_packet_counts[pkt->src_id]++;
+            mesh_stats.e2e_decrypted++;
         } else if (!pkt->e2e_encrypted) {
             mesh_crypto_ctr(&session_crypto, pkt->timestamp, pkt->payload, pkt->payload_len);
         }
@@ -409,7 +489,7 @@ int mesh_process_packet(mesh_packet_t *pkt) {
         if (route && route->valid) {
             pkt->ttl--;
             pkt->link_mic = mesh_crypto_compute_link_mic((mesh_crypto_packet_t*)pkt, &session_crypto);
-        
+            mesh_stats.rx_routed++;
             lora_send_packet(pkt);
             debug_puts("[MESH] Relaying packet to node ");
             debug_puti(pkt->dst_id);
@@ -635,6 +715,7 @@ void mesh_send_rreq(uint8_t dest_id) {
 
     lora_send_packet(&pkt);
 
+    mesh_stats.rreq_sent++;
     debug_puts("[AODV] Sent RREQ for dest=");
     debug_puti(dest_id);
     debug_puts(" rreq_id=");
@@ -662,12 +743,13 @@ void mesh_send_rerr(uint8_t unreachable_id, uint32_t unreachable_seq) {
 
     lora_send_packet(&pkt);
 
+    mesh_stats.rerr_sent++;
     debug_puts("[AODV] Sent RERR for unreachable=");
     debug_puti(unreachable_id);
     debug_puts("\n");
 }
 
-void mesh_process_rerr(mesh_packet_t *pkt) {
+static void mesh_process_rerr(mesh_packet_t *pkt) {
     rerr_payload_t rerr;
     memcpy(&rerr, pkt->payload, sizeof(rerr));
 
@@ -700,7 +782,7 @@ void mesh_process_rerr(mesh_packet_t *pkt) {
     }
 }
 
-void mesh_process_rreq(mesh_packet_t *pkt, uint8_t from_node) {
+static void mesh_process_rreq(mesh_packet_t *pkt, uint8_t from_node) {
     rreq_payload_t rreq;
     memcpy(&rreq, pkt->payload, sizeof(rreq));
 
@@ -739,7 +821,7 @@ void mesh_process_rreq(mesh_packet_t *pkt, uint8_t from_node) {
 
     
         lora_send_packet(&rrep);
-
+        mesh_stats.rrep_sent++;
         debug_puts("[AODV] Sent RREP to orig=");
         debug_puti(rreq.orig_id);
         debug_puts("\n");
@@ -758,7 +840,7 @@ void mesh_process_rreq(mesh_packet_t *pkt, uint8_t from_node) {
     }
 }
 
-void mesh_process_rrep(mesh_packet_t *pkt, uint8_t from_node) {
+static void mesh_process_rrep(mesh_packet_t *pkt, uint8_t from_node) {
     rrep_payload_t rrep;
     memcpy(&rrep, pkt->payload, sizeof(rrep));
 
