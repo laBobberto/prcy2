@@ -5,6 +5,7 @@
 #include "mesh.h"
 #include "lora.h"
 #include "debug.h"
+#include "config.h"
 #include "stm32f1xx_hal.h"
 
 void SysTick_Handler(void) {
@@ -205,6 +206,15 @@ int main(void) {
                         debug_puts("  RAM end:   0x"); debug_puti((uint32_t)&_end); debug_puts("\n");
                         debug_puts("  Free RAM:  "); debug_puti((uint32_t)&_end - sp); debug_puts(" bytes\n");
                         debug_puts("=============\n\n");
+                    } else if (cmd_buf[0] == 'f') {
+                        // Flash config status
+                        config_t cfg;
+                        if (config_load(&cfg) == 0) {
+                            debug_puts("[CMD] Flash config: VALID\n");
+                            debug_puts("  Node ID: "); debug_puti(cfg.node_id); debug_puts("\n");
+                        } else {
+                            debug_puts("[CMD] Flash config: EMPTY\n");
+                        }
                     } else if (cmd_buf[0] == 'v') {
                         debug_puts("\n=== FIRMWARE INFO ===\n");
                         debug_puts("  Version:   "); debug_puts(MESH_FW_VERSION); debug_puts("\n");
