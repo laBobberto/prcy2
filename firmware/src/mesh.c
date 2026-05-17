@@ -433,6 +433,8 @@ void mesh_print_stats(void) {
         debug_puts("  Avg sync offset: "); debug_puti(time_sync_total_offset / time_sync_count); debug_puts("ms\n");
     }
     debug_puts("  Time master:     "); debug_puts(is_time_master ? "YES" : "NO"); debug_puts("\n");
+    extern uint16_t lora_read_battery(void);
+    debug_puts("  Battery:         "); debug_puti(lora_read_battery()); debug_puts(" mV\n");
     debug_puts("  Routes active:   ");
     int routes = 0;
     for (int i = 0; i < MAX_ROUTES; i++) if (routing_table[i].valid) routes++;
